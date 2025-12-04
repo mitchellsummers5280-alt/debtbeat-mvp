@@ -1,27 +1,17 @@
 "use client";
 
-import { useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 
-// ------------------------------------------------------
-// TYPES
-// ------------------------------------------------------
+// ---------- Types ----------
+type Strategy = "warrior" | "rebel" | "wizard";
+
 type Debt = {
   id: number;
   name: string;
-  balance: string;     // store as text for smooth typing
-  apr: string;         // allows "24.99" while typing
-  minPayment: string;  // text -> number only in math
-};
-
-type NumericDebt = {
-  id: number;
-  name: string;
   balance: number;
-  apr: number;
+  apr: number; // percent
   minPayment: number;
 };
-
-type Strategy = "warrior" | "rebel" | "wizard";
 
 type ScheduleRow = {
   month: number;
@@ -30,824 +20,990 @@ type ScheduleRow = {
   principalPaid: number;
 };
 
-type PlanResult = {
-  months: number;
-  totalInterest: number;
-  strategyUsed: Strategy;
-  schedule: ScheduleRow[];
-};
+type PlanResult =
+  | {
+      ok: true;
+      months: number;
+      totalInterest: number;
+      strategyUsed: Strategy;
+      schedule: ScheduleRow[];
+    }
+  | {
+      ok: false;
+      error: string;
+    };
 
-type Recommendation = {
-  recommended: Strategy;
-  summary: string;
-  rationale: string[];
-};
+// ---------- Helpers ----------
 
-// ------------------------------------------------------
-// HELPERS
-// ------------------------------------------------------
-function toNumericDebt(d: Debt): NumericDebt {
-  return {
-    ...d,
-    balance: Number.parseFloat(d.balance) || 0,
-    apr: Number.parseFloat(d.apr) || 0,
-    minPayment: Number.parseFloat(d.minPayment) || 0,
-  };
+function formatMoney(n: number): string {
+  if (!isFinite(n)) return "$0";
+  return `$${n.toLocaleString(undefined, {
+    maximumFractionDigits: 2,
+    minimumFractionDigits: 2,
+  })}`;
 }
 
-function getStrategyLabel(strategy: Strategy): string {
-  switch (strategy) {
-    case "warrior":
-      return "The Warrior";
-    case "rebel":
-      return "The Rebel";
-    case "wizard":
-      return "The Wizard";
-  }
+function calcMonthlyRate(apr: number): number {
+  return apr <= 0 ? 0 : apr / 100 / 12;
 }
 
-function getStrategyEmoji(strategy: Strategy): string {
-  switch (strategy) {
-    case "warrior":
-      return "⚔️";
-    case "rebel":
-      return "🧨";
-    case "wizard":
-      return "🧙‍♂️";
-  }
+function allPaidOff(debts: Debt[]): boolean {
+  return debts.every((d) => d.balance <= 0.01);
 }
 
-function getStrategyTooltip(strategy: Strategy): string {
-  switch (strategy) {
-    case "warrior":
-      return "The Warrior strikes down your smallest balances first for fast wins.";
-    case "rebel":
-      return "The Rebel destroys high interest debt to save the most money.";
-    case "wizard":
-      return "The Wizard blends both approaches for a magical middle ground.";
-  }
+function cloneDebts(debts: Debt[]): Debt[] {
+  return debts.map((d) => ({ ...d }));
 }
 
-// ------------------------------------------------------
-// CALCULATION ENGINE
-// ------------------------------------------------------
+// Basic payoff engine
 function calculatePlan(
-  debts: Debt[],
+  debtsInput: Debt[],
   strategy: Strategy,
   monthlyBudget: number
-): PlanResult | { error: string } {
-  if (debts.length === 0) return { error: "Add at least one card." };
-
-  let working: NumericDebt[] = debts.map(toNumericDebt);
-  let schedule: ScheduleRow[] = [];
-  let month = 0;
-  const maxMonths = 600;
-  let totalInterest = 0;
-
-  const stillOwing = () => working.some((d) => d.balance > 0);
-
-  while (stillOwing() && month < maxMonths) {
-    month++;
-
-    let ordered = [...working];
-
-    if (strategy === "warrior") {
-      ordered.sort((a, b) => a.balance - b.balance);
-    } else if (strategy === "rebel") {
-      ordered.sort((a, b) => b.apr - a.apr);
-    } else if (strategy === "wizard") {
-      ordered.sort(
-        (a, b) =>
-          b.apr / Math.max(b.balance, 1) - a.apr / Math.max(a.balance, 1)
-      );
-    }
-
-    let budgetLeft = monthlyBudget;
-    let monthInterest = 0;
-    let monthPrincipal = 0;
-
-    for (let card of ordered) {
-      if (card.balance <= 0) continue;
-
-      const interest = (card.balance * card.apr) / 100 / 12;
-      monthInterest += interest;
-
-      const required = card.minPayment + interest;
-      const payment = Math.min(required, budgetLeft, card.balance + interest);
-
-      budgetLeft -= payment;
-
-      const principal = Math.max(payment - interest, 0);
-      monthPrincipal += principal;
-
-      card.balance = Math.max(card.balance + interest - payment, 0);
-    }
-
-    totalInterest += monthInterest;
-
-    schedule.push({
-      month,
-      totalBalanceEnd: working.reduce((sum, d) => sum + d.balance, 0),
-      interestPaid: monthInterest,
-      principalPaid: monthPrincipal,
-    });
+): PlanResult {
+  const maxMonths = 600; // 50 years
+  if (debtsInput.length === 0) {
+    return { ok: false, error: "Add at least one card to see a plan." };
   }
 
-  if (month >= maxMonths) {
+  const debts = cloneDebts(debtsInput).filter((d) => d.balance > 0);
+  if (debts.length === 0) {
+    return { ok: false, error: "All your card balances are zero." };
+  }
+
+  const minTotal = debts.reduce((sum, d) => sum + d.minPayment, 0);
+  if (monthlyBudget < minTotal - 0.01) {
     return {
-      error:
-        "At this payment level it would take more than 50 years to become debt free. Increase your budget.",
+      ok: false,
+      error: `Your budget (${formatMoney(
+        monthlyBudget
+      )}) is less than your total minimum payments (${formatMoney(
+        minTotal
+      )}). Increase your budget.`,
     };
   }
 
+  let months = 0;
+  let totalInterest = 0;
+  const schedule: ScheduleRow[] = [];
+
+  while (!allPaidOff(debts) && months < maxMonths) {
+    months += 1;
+
+    // Choose ordering based on strategy
+    const ordered = [...debts].sort((a, b) => {
+      if (strategy === "warrior") {
+        return a.balance - b.balance; // smallest balance first
+      }
+      if (strategy === "rebel") {
+        return b.apr - a.apr; // highest APR first
+      }
+      // wizard – gentle hybrid: sort by APR, then balance
+      const aprDiff = b.apr - a.apr;
+      if (Math.abs(aprDiff) > 0.5) return aprDiff;
+      return a.balance - b.balance;
+    });
+
+    let remainingBudget = monthlyBudget;
+    let monthInterest = 0;
+    let monthPrincipal = 0;
+
+    // First, pay minimums
+    for (const d of ordered) {
+      if (d.balance <= 0) continue;
+      const rate = calcMonthlyRate(d.apr);
+      const interest = d.balance * rate;
+      const min = Math.min(d.minPayment, d.balance + interest);
+
+      if (remainingBudget < min - 0.01) {
+        // budget too low — debt grows forever
+        return {
+          ok: false,
+          error:
+            "At this budget, your debt would grow or never be paid off. Increase your monthly budget.",
+        };
+      }
+
+      const applied = Math.min(min, remainingBudget);
+      const principal = applied - interest;
+
+      d.balance = Math.max(d.balance - principal, 0);
+      remainingBudget -= applied;
+      monthInterest += interest;
+      monthPrincipal += principal;
+    }
+
+    // Then throw all remaining budget at the highest-priority debt
+    for (const d of ordered) {
+      if (remainingBudget <= 0.01) break;
+      if (d.balance <= 0) continue;
+
+      const rate = calcMonthlyRate(d.apr);
+      const interest = d.balance * rate;
+      const payoffNeeded = d.balance + interest;
+
+      const applied = Math.min(payoffNeeded, remainingBudget);
+      const principal = applied - interest;
+
+      d.balance = Math.max(d.balance - principal, 0);
+      remainingBudget -= applied;
+      monthInterest += interest;
+      monthPrincipal += principal;
+      break; // only top-priority card gets snowball/avalanche extra
+    }
+
+    const totalBalanceEnd = debts.reduce((sum, d) => sum + d.balance, 0);
+    totalInterest += monthInterest;
+
+    schedule.push({
+      month: months,
+      totalBalanceEnd,
+      interestPaid: monthInterest,
+      principalPaid: monthPrincipal,
+    });
+
+    if (months >= maxMonths) {
+      return {
+        ok: false,
+        error:
+          "At this payment level it would take more than 50 years to become debt free. Increase your budget.",
+      };
+    }
+  }
+
   return {
-    months: month,
+    ok: true,
+    months,
     totalInterest,
     strategyUsed: strategy,
     schedule,
   };
 }
 
-// ------------------------------------------------------
-// RECOMMENDATION LOGIC
-// ------------------------------------------------------
-function buildRecommendation(
+// Super simple "AI-ish" recommendation
+function pickRecommendedStrategy(
   debts: Debt[],
-  monthlyBudget: number,
-  warrior: PlanResult,
-  rebel: PlanResult,
-  wizard: PlanResult
-): Recommendation {
-  const plans = [
-    { strategy: "warrior" as Strategy, months: warrior.months, interest: warrior.totalInterest },
-    { strategy: "rebel" as Strategy, months: rebel.months, interest: rebel.totalInterest },
-    { strategy: "wizard" as Strategy, months: wizard.months, interest: wizard.totalInterest },
-  ];
-
-  const fastest = plans.reduce((best, p) => (p.months < best.months ? p : best), plans[0]);
-  const cheapest = plans.reduce((best, p) => (p.interest < best.interest ? p : best), plans[0]);
-
-  const numericDebts = debts.map(toNumericDebt);
-  const numCards = numericDebts.length;
-  const highestAPR = Math.max(...numericDebts.map((d) => d.apr || 0), 0);
-  const smallestBalance = Math.min(
-    ...numericDebts.map((d) => (d.balance > 0 ? d.balance : Infinity)),
-    Infinity
-  );
-  const totalMinPayments = numericDebts.reduce(
-    (sum, d) => sum + (d.minPayment || 0),
-    0
-  );
-
-  let recommended: Strategy;
-  const rationale: string[] = [];
-
-  const interestGap = Math.abs(fastest.interest - cheapest.interest);
-  const monthGap = Math.abs(fastest.months - cheapest.months);
-
-  if (fastest.strategy === cheapest.strategy) {
-    recommended = fastest.strategy;
-    rationale.push(
-      `${getStrategyLabel(recommended)} is both the fastest path and the one that pays the least total interest.`
-    );
-  } else {
-    if (interestGap > 1000 && monthGap <= 12) {
-      recommended = cheapest.strategy;
-      rationale.push(
-        `${getStrategyLabel(cheapest.strategy)} saves about $${interestGap.toFixed(
-          0
-        )} in interest compared with ${getStrategyLabel(
-          fastest.strategy
-        )}, without adding a lot of extra time.`
-      );
-    } else {
-      recommended = fastest.strategy;
-      rationale.push(
-        `${getStrategyLabel(fastest.strategy)} gets you debt-free about ${monthGap} month(s) faster, while the interest difference isn't huge (~$${interestGap.toFixed(
-          0
-        )}).`
-      );
-    }
+  monthlyBudget: number
+): { strategy: Strategy; reason: string } {
+  if (debts.length === 0) {
+    return {
+      strategy: "warrior",
+      reason: "Add your cards first, then we’ll help you choose a strategy.",
+    };
   }
 
-  if (recommended === "warrior") {
-    if (numCards > 2 && smallestBalance !== Infinity) {
-      rationale.push(
-        `You have ${numCards} cards, and at least one smaller balance (~$${smallestBalance.toFixed(
-          0
-        )}), so quick wins can help keep you motivated.`
-      );
-    }
-  } else if (recommended === "rebel") {
-    rationale.push(
-      `Your highest APR is about ${highestAPR.toFixed(
-        1
-      )}%, so focusing your extra money on expensive interest first helps reduce total cost.`
-    );
-  } else if (recommended === "wizard") {
-    rationale.push(
-      `The trade-off between speed and interest is fairly balanced, so a blended approach makes sense.`
-    );
+  const highestApr = Math.max(...debts.map((d) => d.apr));
+  const smallestBalance = Math.min(...debts.map((d) => d.balance));
+  const totalBalance = debts.reduce((s, d) => s + d.balance, 0);
+  const payoffRatio = monthlyBudget / (totalBalance || 1);
+
+  // Very high APR anywhere? blast interest first
+  if (highestApr >= 24) {
+    return {
+      strategy: "rebel",
+      reason:
+        "One of your cards has a very high APR. The Rebel focuses on killing expensive interest first.",
+    };
   }
 
-  if (monthlyBudget < totalMinPayments * 1.2 && totalMinPayments > 0) {
-    rationale.push(
-      `Your budget ($${monthlyBudget.toFixed(
-        0
-      )}) is fairly close to the total minimum payments ($${totalMinPayments.toFixed(
-        0
-      )}), so any extra optimization from strategy choice really matters.`
-    );
-  } else if (totalMinPayments > 0) {
-    rationale.push(
-      `You’re paying well above the minimums, which is great — it gives your chosen strategy plenty of power.`
-    );
+  // Lots of small debts & decent payoff ratio? snowball wins motivation
+  if (smallestBalance < 1500 && payoffRatio >= 0.03) {
+    return {
+      strategy: "warrior",
+      reason:
+        "You have some smaller balances and a solid budget. The Warrior snowballs wins quickly for motivation.",
+    };
   }
 
-  const summary = `Based on your balances, APRs and budget, I’d lean toward ${getStrategyLabel(
-    recommended
-  )} for you.`;
-
-  return { recommended, summary, rationale };
+  // Otherwise, balanced hybrid
+  return {
+    strategy: "wizard",
+    reason:
+      "Your debts are more balanced. The Wizard blends interest savings with steady psychological wins.",
+  };
 }
 
-// ------------------------------------------------------
-// COMPONENT
-// ------------------------------------------------------
+// ---------- Component ----------
+
 export default function Home() {
   const [debts, setDebts] = useState<Debt[]>([
-    { id: 1, name: "Card 1", balance: "", apr: "", minPayment: "" },
+    { id: 1, name: "Card 1", balance: 0, apr: 0, minPayment: 0 },
   ]);
 
   const [strategy, setStrategy] = useState<Strategy>("warrior");
-  const [hoveredStrategy, setHoveredStrategy] = useState<Strategy | null>(null);
   const [monthlyBudget, setMonthlyBudget] = useState<number>(500);
   const [result, setResult] = useState<PlanResult | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [recommendation, setRecommendation] = useState<Recommendation | null>(
-    null
+  const [recommendation, setRecommendation] = useState<string | null>(null);
+  const [hoveredStrategy, setHoveredStrategy] = useState<Strategy | null>(null);
+  const [showSchedule, setShowSchedule] = useState(false);
+
+  // --- Local storage for cards & budget ---
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const stored = window.localStorage.getItem("debtbeat_state_v1");
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed.debts) setDebts(parsed.debts);
+        if (parsed.monthlyBudget) setMonthlyBudget(parsed.monthlyBudget);
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(
+        "debtbeat_state_v1",
+        JSON.stringify({ debts, monthlyBudget })
+      );
+    } catch {
+      // ignore
+    }
+  }, [debts, monthlyBudget]);
+
+  // --- Derived values ---
+  const totalRemainingDebt = useMemo(
+    () => debts.reduce((sum, d) => sum + (d.balance || 0), 0),
+    [debts]
   );
-  const [showSchedule, setShowSchedule] = useState<boolean>(false);
+  const progressCap = 20000;
+  const debtProgress =
+    totalRemainingDebt <= 0
+      ? 0
+      : Math.min(totalRemainingDebt / progressCap, 1);
 
-  // numeric snapshot for UI stuff (progress bar, etc.)
-  const numericDebts = debts.map(toNumericDebt);
-  const totalDebt = numericDebts.reduce((sum, d) => sum + d.balance, 0);
-  const maxDebtForBar = 20000; // visualization cap
-  const debtPercent =
-    totalDebt > 0 ? Math.min((totalDebt / maxDebtForBar) * 100, 100) : 0;
+  // --- Handlers ---
+  const addDebt = () => {
+    const nextId = debts.length ? Math.max(...debts.map((d) => d.id)) + 1 : 1;
+    setDebts((prev) => [
+      ...prev,
+      { id: nextId, name: `Card ${nextId}`, balance: 0, apr: 0, minPayment: 0 },
+    ]);
+  };
 
-  // ----------------------------------------------------
-  // handlers
-  // ----------------------------------------------------
+  const removeDebt = (id: number) => {
+    setDebts((prev) => prev.filter((d) => d.id !== id));
+  };
+
   const handleDebtChange = (
     id: number,
     field: keyof Omit<Debt, "id">,
     value: string
   ) => {
     setDebts((prev) =>
-      prev.map((d) =>
-        d.id === id
-          ? {
-              ...d,
-              [field]: value,
-            }
-          : d
-      )
+      prev.map((d) => {
+        if (d.id !== id) return d;
+        if (field === "name") return { ...d, name: value };
+        const num = value === "" ? 0 : Number.parseFloat(value);
+        return {
+          ...d,
+          [field]: Number.isNaN(num) ? 0 : num,
+        };
+      })
     );
   };
 
-  const addCard = () => {
-    setDebts((prev) => [
-      ...prev,
-      {
-        id: Date.now(),
-        name: `Card ${prev.length + 1}`,
-        balance: "",
-        apr: "",
-        minPayment: "",
-      },
-    ]);
-  };
-
-  const deleteCard = (id: number) => {
-    setDebts((prev) => prev.filter((d) => d.id !== id));
-  };
-
-  const generatePlan = () => {
-    const output = calculatePlan(debts, strategy, monthlyBudget);
-
-    if ("error" in output) {
-      setError(output.error);
-      setResult(null);
-      setRecommendation(null);
-      setShowSchedule(false);
-      return;
-    }
-
+  const handleGenerate = () => {
     setError(null);
-    setResult(output);
-    setShowSchedule(false); // collapse details when regenerating
-
-    const warriorOut = calculatePlan(debts, "warrior", monthlyBudget);
-    const rebelOut = calculatePlan(debts, "rebel", monthlyBudget);
-    const wizardOut = calculatePlan(debts, "wizard", monthlyBudget);
-
-    if (
-      "error" in warriorOut ||
-      "error" in rebelOut ||
-      "error" in wizardOut
-    ) {
-      setRecommendation(null);
+    setResult(null);
+    setRecommendation(null);
+    const plan = calculatePlan(debts, strategy, monthlyBudget);
+    if (!plan.ok) {
+      setError(plan.error);
+      setResult(plan);
       return;
     }
-
-    const rec = buildRecommendation(
-      debts,
-      monthlyBudget,
-      warriorOut,
-      rebelOut,
-      wizardOut
-    );
-    setRecommendation(rec);
+    setResult(plan);
   };
 
-  // ------------------------------------------------------
-  // RENDER
-  // ------------------------------------------------------
+  const handleRecommend = () => {
+    const rec = pickRecommendedStrategy(debts, monthlyBudget);
+    setStrategy(rec.strategy);
+    setRecommendation(rec.reason);
+
+    // Also immediately recalc
+    const plan = calculatePlan(debts, rec.strategy, monthlyBudget);
+    setResult(plan);
+    if (!plan.ok) {
+      setError(plan.error);
+    } else {
+      setError(null);
+    }
+  };
+
+  // --- Small validation helper for highlighting fields ---
+  const fieldHasError = (d: Debt, field: keyof Omit<Debt, "id">): boolean => {
+    if (field === "name") return d.name.trim() === "";
+    if (field === "balance") return d.balance <= 0;
+    if (field === "apr") return d.apr < 0;
+    if (field === "minPayment") return d.minPayment < 0;
+    return false;
+  };
+
+  const monthsToYears = (months: number) => months / 12;
+
+  // ---------- Render ----------
+
   return (
     <div
       style={{
-        maxWidth: "900px",
-        margin: "0 auto",
-        padding: "40px 20px",
+        minHeight: "100vh",
+        backgroundColor: "#050505",
         color: "white",
-        fontFamily: "sans-serif",
+        padding: "24px 16px 40px",
+        fontFamily: "-apple-system, system-ui, sans-serif",
+        maxWidth: "820px",
+        margin: "0 auto",
       }}
     >
-      <h1 style={{ textAlign: "center", marginBottom: "8px" }}>DebtBeat</h1>
-      <p style={{ textAlign: "center", marginBottom: "32px" }}>
-        Add your credit cards, choose a strategy, and estimate your path to
-        being debt free.
-      </p>
-
-      {/* ---------------------- CARDS ---------------------- */}
-      <h2 style={{ fontSize: "20px", marginBottom: "16px" }}>Your Cards</h2>
-
-      <div
+      {/* Header */}
+      <header
         style={{
-          display: "grid",
-          gridTemplateColumns: "2fr 1.5fr 1.5fr 1.5fr 60px",
-          gap: "8px",
-          marginBottom: "16px",
-          color: "#aaa",
-          fontSize: "14px",
+          textAlign: "center",
+          marginBottom: "24px",
         }}
       >
-        <span>Name</span>
-        <span>Balance ($)</span>
-        <span>APR (%)</span>
-        <span>Min Payment ($)</span>
-        <span></span>
-      </div>
-
-      {debts.map((d) => (
-        <div
-          key={d.id}
+        <h1
           style={{
-            display: "grid",
-            gridTemplateColumns: "2fr 1.5fr 1.5fr 1.5fr 60px",
-            gap: "8px",
+            fontSize: "32px",
+            fontWeight: 800,
             marginBottom: "12px",
           }}
         >
-          <input
-            value={d.name}
-            onChange={(e) => handleDebtChange(d.id, "name", e.target.value)}
-            style={{
-              padding: "10px",
-              background: "#18181b",
-              color: "white",
-              border: "1px solid #333",
-              borderRadius: "6px",
-            }}
-          />
+          DebtBeat
+        </h1>
+        <p
+          style={{
+            color: "#bbb",
+            fontSize: "15px",
+            lineHeight: 1.4,
+          }}
+        >
+          Add your credit cards, choose a strategy, and estimate your path to
+          being debt free.
+        </p>
+      </header>
 
-          <input
-            inputMode="decimal"
-            value={d.balance}
-            placeholder="0"
-            onChange={(e) =>
-              handleDebtChange(d.id, "balance", e.target.value)
-            }
-            style={{
-              padding: "10px",
-              background: "#18181b",
-              color: "white",
-              border: "1px solid #333",
-              borderRadius: "6px",
-            }}
-          />
-
-          <input
-            inputMode="decimal"
-            value={d.apr}
-            placeholder="0"
-            onChange={(e) => handleDebtChange(d.id, "apr", e.target.value)}
-            style={{
-              padding: "10px",
-              background: "#18181b",
-              color: "white",
-              border: "1px solid #333",
-              borderRadius: "6px",
-            }}
-          />
-
-          <input
-            inputMode="decimal"
-            value={d.minPayment}
-            placeholder="0"
-            onChange={(e) =>
-              handleDebtChange(d.id, "minPayment", e.target.value)
-            }
-            style={{
-              padding: "10px",
-              background: "#18181b",
-              color: "white",
-              border: "1px solid #333",
-              borderRadius: "6px",
-            }}
-          />
-
-          <button
-            onClick={() => deleteCard(d.id)}
-            style={{
-              background: "#7f1d1d",
-              color: "white",
-              border: "none",
-              borderRadius: "6px",
-              cursor: "pointer",
-            }}
-          >
-            ✕
-          </button>
-        </div>
-      ))}
-
-      <button
-        onClick={addCard}
+      {/* Cards section */}
+      <section
         style={{
-          color: "#4ade80",
-          border: "1px dashed #4ade80",
-          padding: "10px 16px",
-          borderRadius: "8px",
-          cursor: "pointer",
-          marginBottom: "16px",
-          background: "transparent",
+          background: "#090909",
+          padding: "16px",
+          borderRadius: "16px",
+          border: "1px solid #222",
+          marginBottom: "20px",
         }}
       >
-        + Add Card
-      </button>
+        <h2
+          style={{
+            fontSize: "20px",
+            marginBottom: "12px",
+          }}
+        >
+          Your Cards
+        </h2>
 
-      {/* TOTAL REMAINING DEBT PROGRESS BAR */}
-      <div style={{ marginBottom: "32px" }}>
-        <div
-          style={{
-            fontSize: "14px",
-            marginBottom: "4px",
-            color: "#e5e7eb",
-          }}
-        >
-          Total remaining debt: ${totalDebt.toFixed(2)}
-        </div>
-        <div
-          style={{
-            position: "relative",
-            height: "10px",
-            borderRadius: "999px",
-            background: "#020617",
-            overflow: "hidden",
-            border: "1px solid #1f2937",
-          }}
-        >
+        {/* Total debt + progress */}
+        <div style={{ marginBottom: "14px" }}>
           <div
             style={{
-              width: `${debtPercent}%`,
-              height: "100%",
-              background:
-                "linear-gradient(90deg,#4ade80,#22c55e,#16a34a)",
-              transition: "width 200ms ease-out",
+              display: "flex",
+              justifyContent: "space-between",
+              marginBottom: "6px",
+              fontSize: "14px",
             }}
-          />
+          >
+            <span>Total remaining debt:</span>
+            <strong>{formatMoney(totalRemainingDebt)}</strong>
+          </div>
+          <div
+            style={{
+              position: "relative",
+              height: "8px",
+              borderRadius: "999px",
+              overflow: "hidden",
+              background: "#151515",
+            }}
+          >
+            <div
+              style={{
+                width: `${debtProgress * 100}%`,
+                height: "100%",
+                background:
+                  debtProgress < 0.5
+                    ? "linear-gradient(90deg,#4ade80,#22c55e)"
+                    : "linear-gradient(90deg,#f97316,#ef4444)",
+                transition: "width 0.3s ease-out",
+              }}
+            />
+          </div>
+          <div
+            style={{
+              fontSize: "11px",
+              marginTop: "4px",
+              color: "#777",
+            }}
+          >
+            Bar caps at {formatMoney(progressCap)} for visualization.
+          </div>
         </div>
-        <div
+
+        {/* Card forms */}
+        <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+          {debts.map((d) => (
+            <div
+              key={d.id}
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: "8px",
+                padding: "12px",
+                borderRadius: "12px",
+                background: "#101010",
+                border: "1px solid #262626",
+              }}
+            >
+              {/* Name */}
+              <div>
+                <label
+                  style={{
+                    fontSize: "12px",
+                    color: "#999",
+                    display: "block",
+                    marginBottom: "4px",
+                  }}
+                >
+                  Name
+                </label>
+                <input
+                  type="text"
+                  value={d.name}
+                  onChange={(e) =>
+                    handleDebtChange(d.id, "name", e.target.value)
+                  }
+                  placeholder="Card name"
+                  style={{
+                    width: "100%",
+                    padding: "10px",
+                    borderRadius: "8px",
+                    border: fieldHasError(d, "name")
+                      ? "1px solid #ef4444"
+                      : "1px solid #333",
+                    background: "#181818",
+                    color: "white",
+                    fontSize: "14px",
+                  }}
+                />
+              </div>
+
+              {/* Balance */}
+              <div>
+                <label
+                  style={{
+                    fontSize: "12px",
+                    color: "#999",
+                    display: "block",
+                    marginBottom: "4px",
+                  }}
+                >
+                  Balance ($)
+                </label>
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  step="0.01"
+                  value={d.balance === 0 ? "" : d.balance}
+                  onChange={(e) =>
+                    handleDebtChange(d.id, "balance", e.target.value)
+                  }
+                  placeholder="0.00"
+                  style={{
+                    width: "100%",
+                    padding: "10px",
+                    borderRadius: "8px",
+                    border: fieldHasError(d, "balance")
+                      ? "1px solid #ef4444"
+                      : "1px solid #333",
+                    background: "#181818",
+                    color: "white",
+                    fontSize: "14px",
+                  }}
+                />
+              </div>
+
+              {/* APR */}
+              <div>
+                <label
+                  style={{
+                    fontSize: "12px",
+                    color: "#999",
+                    display: "block",
+                    marginBottom: "4px",
+                  }}
+                >
+                  APR (%)
+                </label>
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  step="0.01"
+                  value={d.apr === 0 ? "" : d.apr}
+                  onChange={(e) =>
+                    handleDebtChange(d.id, "apr", e.target.value)
+                  }
+                  placeholder="e.g. 24.99"
+                  style={{
+                    width: "100%",
+                    padding: "10px",
+                    borderRadius: "8px",
+                    border: fieldHasError(d, "apr")
+                      ? "1px solid #ef4444"
+                      : "1px solid #333",
+                    background: "#181818",
+                    color: "white",
+                    fontSize: "14px",
+                  }}
+                />
+              </div>
+
+              {/* Min payment */}
+              <div>
+                <label
+                  style={{
+                    fontSize: "12px",
+                    color: "#999",
+                    display: "block",
+                    marginBottom: "4px",
+                  }}
+                >
+                  Min payment ($)
+                </label>
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  step="0.01"
+                  value={d.minPayment === 0 ? "" : d.minPayment}
+                  onChange={(e) =>
+                    handleDebtChange(d.id, "minPayment", e.target.value)
+                  }
+                  placeholder="0.00"
+                  style={{
+                    width: "100%",
+                    padding: "10px",
+                    borderRadius: "8px",
+                    border: fieldHasError(d, "minPayment")
+                      ? "1px solid #ef4444"
+                      : "1px solid #333",
+                    background: "#181818",
+                    color: "white",
+                    fontSize: "14px",
+                  }}
+                />
+              </div>
+
+              {/* Delete button */}
+              {debts.length > 1 && (
+                <button
+                  onClick={() => removeDebt(d.id)}
+                  style={{
+                    alignSelf: "flex-end",
+                    marginTop: "2px",
+                    padding: "6px 10px",
+                    borderRadius: "999px",
+                    border: "none",
+                    background: "#3f1d1d",
+                    color: "#fca5a5",
+                    fontSize: "12px",
+                  }}
+                >
+                  Remove card
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+
+        {/* Add card button */}
+        <button
+          onClick={addDebt}
           style={{
-            fontSize: "11px",
-            color: "#9ca3af",
-            marginTop: "4px",
+            marginTop: "12px",
+            padding: "10px 14px",
+            borderRadius: "10px",
+            border: "1px dashed #4ade80",
+            background: "transparent",
+            color: "#4ade80",
+            fontSize: "14px",
           }}
         >
-          Bar caps at ${maxDebtForBar.toLocaleString()} for visualization.
-        </div>
-      </div>
+          + Add Card
+        </button>
+      </section>
 
-      {/* ------------- STRATEGY & BUDGET ------------- */}
-      <h2 style={{ fontSize: "20px", marginBottom: "16px" }}>
-        Strategy & Budget
-      </h2>
+      {/* Strategy & Budget */}
+      <section
+        style={{
+          background: "#090909",
+          padding: "16px",
+          borderRadius: "16px",
+          border: "1px solid #222",
+          marginBottom: "20px",
+        }}
+      >
+        <h2
+          style={{
+            fontSize: "20px",
+            marginBottom: "12px",
+          }}
+        >
+          Strategy &amp; Budget
+        </h2>
 
-      <div style={{ marginBottom: "16px" }}>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: "12px" }}>
-          {(["warrior", "rebel", "wizard"] as Strategy[]).map((option) => {
-            const isActive = strategy === option;
-            const isHovered = hoveredStrategy === option;
-            const isRecommended =
-              recommendation &&
-              recommendation.recommended === option;
-
+        {/* Strategy pill buttons */}
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: "10px",
+            marginBottom: "14px",
+          }}
+        >
+          {(
+            [
+              { key: "warrior", label: "The Warrior", icon: "⚔️" },
+              { key: "rebel", label: "The Rebel", icon: "🧨" },
+              { key: "wizard", label: "The Wizard", icon: "🧙‍♂️" },
+            ] as { key: Strategy; label: string; icon: string }[]
+          ).map((opt) => {
+            const active = strategy === opt.key;
+            const hovered = hoveredStrategy === opt.key;
             return (
               <button
-                key={option}
-                type="button"
-                title={getStrategyTooltip(option)}
-                onClick={() => setStrategy(option)}
-                onMouseEnter={() => setHoveredStrategy(option)}
+                key={opt.key}
+                onClick={() => setStrategy(opt.key)}
+                onMouseEnter={() => setHoveredStrategy(opt.key)}
                 onMouseLeave={() => setHoveredStrategy(null)}
                 style={{
+                  flex: "1 1 30%",
+                  minWidth: "0",
+                  padding: "10px 14px",
                   borderRadius: "999px",
-                  padding: "14px 26px",
-                  backgroundColor: isActive ? "#4ade80" : "#18181b",
-                  color: isActive ? "#0f172a" : "#e5e7eb",
+                  border: active ? "1px solid #4ade80" : "1px solid #333",
+                  background: active ? "#22c55e" : "#141414",
+                  color: active ? "#052e16" : "#e5e5e5",
                   display: "flex",
                   alignItems: "center",
-                  gap: "10px",
-                  cursor: "pointer",
-                  fontSize: "18px",
+                  justifyContent: "center",
+                  gap: "8px",
+                  fontSize: "14px",
                   fontWeight: 600,
-                  border: isActive
-                    ? "2px solid #4ade80"
-                    : isRecommended
-                    ? "1px solid #22c55e"
-                    : "1px solid #27272f",
-                  boxShadow: isActive
-                    ? "0 0 0 1px rgba(34,197,94,0.2), 0 12px 30px rgba(15,23,42,0.8)"
-                    : "0 6px 18px rgba(0,0,0,0.4)",
+                  transform: hovered ? "translateY(-2px) scale(1.02)" : "none",
+                  boxShadow: active
+                    ? "0 0 0 1px #22c55e, 0 12px 30px rgba(34,197,94,0.35)"
+                    : "none",
                   transition:
-                    "background-color 150ms ease-out, color 150ms ease-out, transform 120ms ease-out, box-shadow 150ms ease-out, border 150ms ease-out",
-                  transform:
-                    isActive || isHovered
-                      ? "translateY(-2px) scale(1.02)"
-                      : "translateY(0) scale(1)",
+                    "background 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease",
                 }}
               >
                 <span
                   style={{
                     display: "inline-block",
-                    fontSize: "22px",
-                    transition: "transform 150ms ease-out",
-                    transform:
-                      isActive || isHovered
-                        ? "translateY(-2px) scale(1.2)"
-                        : "translateY(0) scale(1)",
+                    animation:
+                      active && hovered ? "pulse-icon 0.8s infinite" : "none",
                   }}
                 >
-                  {getStrategyEmoji(option)}
+                  {opt.icon}
                 </span>
-
-                <span>{getStrategyLabel(option)}</span>
-
-                {isRecommended && !isActive && (
-                  <span
-                    style={{
-                      marginLeft: "4px",
-                      fontSize: "11px",
-                      padding: "2px 8px",
-                      borderRadius: "999px",
-                      background: "rgba(34,197,94,0.1)",
-                      color: "#bbf7d0",
-                      border: "1px solid rgba(34,197,94,0.4)",
-                    }}
-                  >
-                    Recommended
-                  </span>
-                )}
+                <span>{opt.label}</span>
               </button>
             );
           })}
         </div>
-      </div>
 
-      <label style={{ display: "block", marginBottom: "8px" }}>
-        Total monthly budget for debt payoff ($):
-      </label>
-      <input
-        inputMode="decimal"
-        value={monthlyBudget || ""}
-        placeholder="500"
-        onChange={(e) => setMonthlyBudget(Number(e.target.value) || 0)}
-        style={{
-          padding: "14px",
-          width: "250px",
-          background: "#18181b",
-          color: "white",
-          border: "1px solid #333",
-          borderRadius: "8px",
-          marginBottom: "22px",
-        }}
-      />
+        {/* Simple explanation */}
+        <p style={{ fontSize: "12px", color: "#9ca3af", marginBottom: "10px" }}>
+          ⚔️ <b>Warrior</b>: smallest balances first (motivation).{" "}
+          <br />
+          🧨 <b>Rebel</b>: highest APR first (interest savings).{" "}
+          <br />
+          🧙‍♂️ <b>Wizard</b>: smart blend of both.
+        </p>
 
-      <button
-        onClick={generatePlan}
-        style={{
-          padding: "16px 28px",
-          background: "#16a34a",
-          color: "#f9fafb",
-          fontWeight: "bold",
-          fontSize: "18px",
-          borderRadius: "10px",
-          cursor: "pointer",
-          border: "none",
-          boxShadow: "0 6px 18px rgba(0,0,0,0.35)",
-        }}
-      >
-        Generate Plan
-      </button>
-
-      {/* RESULTS SUMMARY */}
-      {error && (
-        <p style={{ color: "#f87171", marginTop: "20px" }}>{error}</p>
-      )}
-
-      {result && (
-        <div style={{ marginTop: "32px" }}>
-          <h3>
-            🔥 With {getStrategyLabel(result.strategyUsed)}, you could be debt
-            free in {result.months} months (~
-            {(result.months / 12).toFixed(1)} years). Total interest paid: $
-            {result.totalInterest.toFixed(2)}
-          </h3>
-
-          {/* COLLAPSIBLE PAYOFF SCHEDULE */}
-          <div style={{ marginTop: "16px" }}>
-            <button
-              onClick={() => setShowSchedule((prev) => !prev)}
-              style={{
-                padding: "8px 14px",
-                fontSize: "14px",
-                borderRadius: "999px",
-                border: "1px solid #4b5563",
-                background: "#020617",
-                color: "#e5e7eb",
-                cursor: "pointer",
-              }}
-            >
-              {showSchedule
-                ? "Hide detailed payoff schedule"
-                : "Show detailed payoff schedule"}
-            </button>
-
-            {showSchedule && (
-              <div
-                style={{
-                  marginTop: "12px",
-                  maxHeight: "280px",
-                  overflowY: "auto",
-                  borderRadius: "8px",
-                  border: "1px solid #1f2933",
-                  background: "#020617",
-                }}
-              >
-                <table
-                  style={{
-                    width: "100%",
-                    borderCollapse: "collapse",
-                    fontSize: "13px",
-                  }}
-                >
-                  <thead>
-                    <tr
-                      style={{
-                        background: "#0b1120",
-                        position: "sticky",
-                        top: 0,
-                      }}
-                    >
-                      <th
-                        style={{
-                          textAlign: "left",
-                          padding: "8px",
-                          borderBottom: "1px solid #1f2937",
-                        }}
-                      >
-                        Month
-                      </th>
-                      <th
-                        style={{
-                          textAlign: "right",
-                          padding: "8px",
-                          borderBottom: "1px solid #1f2937",
-                        }}
-                      >
-                        End Balance ($)
-                      </th>
-                      <th
-                        style={{
-                          textAlign: "right",
-                          padding: "8px",
-                          borderBottom: "1px solid #1f2937",
-                        }}
-                      >
-                        Interest Paid ($)
-                      </th>
-                      <th
-                        style={{
-                          textAlign: "right",
-                          padding: "8px",
-                          borderBottom: "1px solid #1f2937",
-                        }}
-                      >
-                        Principal Paid ($)
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {result.schedule.map((row) => (
-                      <tr key={row.month}>
-                        <td
-                          style={{
-                            padding: "6px 8px",
-                            borderBottom: "1px solid #111827",
-                          }}
-                        >
-                          {row.month}
-                        </td>
-                        <td
-                          style={{
-                            padding: "6px 8px",
-                            textAlign: "right",
-                            borderBottom: "1px solid #111827",
-                          }}
-                        >
-                          {row.totalBalanceEnd.toFixed(2)}
-                        </td>
-                        <td
-                          style={{
-                            padding: "6px 8px",
-                            textAlign: "right",
-                            borderBottom: "1px solid #111827",
-                          }}
-                        >
-                          {row.interestPaid.toFixed(2)}
-                        </td>
-                        <td
-                          style={{
-                            padding: "6px 8px",
-                            textAlign: "right",
-                            borderBottom: "1px solid #111827",
-                          }}
-                        >
-                          {row.principalPaid.toFixed(2)}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* RECOMMENDATION MODE */}
-      {recommendation && (
-        <div
+        {/* Recommendation button */}
+        <button
+          onClick={handleRecommend}
           style={{
-            marginTop: "24px",
-            padding: "18px 20px",
-            borderRadius: "12px",
-            background: "#020617",
-            border: "1px solid #1e293b",
+            marginTop: "4px",
+            marginBottom: "10px",
+            padding: "8px 10px",
+            borderRadius: "999px",
+            border: "1px solid #38bdf8",
+            background: "rgba(8,47,73,0.8)",
+            color: "#e0f2fe",
+            fontSize: "12px",
           }}
         >
-          <h3 style={{ marginBottom: "8px" }}>🤖 Recommendation Mode</h3>
-          <p style={{ marginBottom: "8px" }}>{recommendation.summary}</p>
-          <ul style={{ paddingLeft: "20px", marginBottom: "8px" }}>
-            {recommendation.rationale.map((line, i) => (
-              <li key={i} style={{ marginBottom: "4px" }}>
-                {line}
-              </li>
-            ))}
-          </ul>
-          {strategy !== recommendation.recommended && (
-            <p style={{ fontSize: "14px", color: "#9ca3af" }}>
-              You’re currently using{" "}
-              <strong>{getStrategyLabel(strategy)}</strong>. You can click{" "}
-              <strong>{getStrategyLabel(recommendation.recommended)}</strong>{" "}
-              above and hit <em>Generate Plan</em> again to see how it
-              compares.
-            </p>
-          )}
+          💡 Let DebtBeat recommend a strategy
+        </button>
+
+        {recommendation && (
+          <p
+            style={{
+              fontSize: "12px",
+              color: "#e5e7eb",
+              background: "#111827",
+              padding: "8px 10px",
+              borderRadius: "8px",
+              marginBottom: "10px",
+            }}
+          >
+            <b>Recommendation:</b> {recommendation}
+          </p>
+        )}
+
+        {/* Budget */}
+        <div style={{ marginTop: "8px" }}>
+          <label
+            style={{
+              fontSize: "14px",
+              marginBottom: "6px",
+              display: "block",
+            }}
+          >
+            Total monthly budget for debt payoff ($):
+          </label>
+          <input
+            type="number"
+            inputMode="decimal"
+            step="0.01"
+            value={monthlyBudget}
+            onChange={(e) => {
+              const v = e.target.value === "" ? 0 : Number.parseFloat(e.target.value);
+              setMonthlyBudget(Number.isNaN(v) ? 0 : v);
+            }}
+            style={{
+              width: "100%",
+              maxWidth: "260px",
+              padding: "10px",
+              borderRadius: "10px",
+              border: "1px solid #333",
+              background: "#181818",
+              color: "white",
+              fontSize: "15px",
+            }}
+          />
         </div>
+
+        {/* Generate plan button */}
+        <button
+          onClick={handleGenerate}
+          style={{
+            marginTop: "16px",
+            padding: "12px 18px",
+            borderRadius: "999px",
+            border: "none",
+            background:
+              "linear-gradient(120deg, #22c55e, #16a34a, #22c55e)",
+            backgroundSize: "200% 200%",
+            color: "#022c22",
+            fontSize: "15px",
+            fontWeight: 700,
+            boxShadow: "0 12px 30px rgba(34,197,94,0.5)",
+          }}
+        >
+          Generate Plan
+        </button>
+
+        {error && (
+          <p
+            style={{
+              marginTop: "12px",
+              fontSize: "13px",
+              color: "#fecaca",
+              background: "#450a0a",
+              padding: "8px 10px",
+              borderRadius: "8px",
+            }}
+          >
+            ⚠️ {error}
+          </p>
+        )}
+      </section>
+
+      {/* Results */}
+      {result && result.ok && (
+        <section
+          style={{
+            background: "#090909",
+            padding: "16px",
+            borderRadius: "16px",
+            border: "1px solid #222",
+            marginBottom: "16px",
+          }}
+        >
+          <h2
+            style={{
+              fontSize: "20px",
+              marginBottom: "10px",
+            }}
+          >
+            Plan Summary
+          </h2>
+          <p style={{ fontSize: "14px", marginBottom: "4px" }}>
+            🔥 With{" "}
+            <b>
+              {strategy === "warrior"
+                ? "The Warrior"
+                : strategy === "rebel"
+                ? "The Rebel"
+                : "The Wizard"}
+            </b>{" "}
+            strategy, you could be debt free in{" "}
+            <b>{result.months}</b> months (
+            <b>{monthsToYears(result.months).toFixed(1)} years</b>).
+          </p>
+          <p style={{ fontSize: "14px" }}>
+            Estimated total interest paid:{" "}
+            <b>{formatMoney(result.totalInterest)}</b>.
+          </p>
+
+          {/* Toggle schedule */}
+          <button
+            onClick={() => setShowSchedule((s) => !s)}
+            style={{
+              marginTop: "10px",
+              fontSize: "12px",
+              padding: "6px 10px",
+              borderRadius: "999px",
+              border: "1px solid #374151",
+              background: "#111827",
+              color: "#e5e7eb",
+            }}
+          >
+            {showSchedule ? "Hide" : "Show"} payoff schedule (first 24 months)
+          </button>
+
+          {showSchedule && (
+            <div
+              style={{
+                marginTop: "10px",
+                maxHeight: "260px",
+                overflow: "auto",
+                borderRadius: "8px",
+                border: "1px solid #1f2937",
+              }}
+            >
+              <table
+                style={{
+                  width: "100%",
+                  borderCollapse: "collapse",
+                  fontSize: "12px",
+                }}
+              >
+                <thead>
+                  <tr
+                    style={{
+                      background: "#111827",
+                      position: "sticky",
+                      top: 0,
+                    }}
+                  >
+                    <th
+                      style={{
+                        textAlign: "left",
+                        padding: "6px 8px",
+                        borderBottom: "1px solid #1f2937",
+                      }}
+                    >
+                      Month
+                    </th>
+                    <th
+                      style={{
+                        textAlign: "right",
+                        padding: "6px 8px",
+                        borderBottom: "1px solid #1f2937",
+                      }}
+                    >
+                      Balance
+                    </th>
+                    <th
+                      style={{
+                        textAlign: "right",
+                        padding: "6px 8px",
+                        borderBottom: "1px solid #1f2937",
+                      }}
+                    >
+                      Interest
+                    </th>
+                    <th
+                      style={{
+                        textAlign: "right",
+                        padding: "6px 8px",
+                        borderBottom: "1px solid #1f2937",
+                      }}
+                    >
+                      Principal
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {result.schedule.slice(0, 24).map((row) => (
+                    <tr
+                      key={row.month}
+                      style={{
+                        background: row.month % 2 === 0 ? "#020617" : "#030712",
+                      }}
+                    >
+                      <td style={{ padding: "6px 8px" }}>{row.month}</td>
+                      <td
+                        style={{
+                          padding: "6px 8px",
+                          textAlign: "right",
+                        }}
+                      >
+                        {formatMoney(row.totalBalanceEnd)}
+                      </td>
+                      <td
+                        style={{
+                          padding: "6px 8px",
+                          textAlign: "right",
+                        }}
+                      >
+                        {formatMoney(row.interestPaid)}
+                      </td>
+                      <td
+                        style={{
+                          padding: "6px 8px",
+                          textAlign: "right",
+                        }}
+                      >
+                        {formatMoney(row.principalPaid)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
       )}
+
+      {/* Footer disclaimer */}
+      <footer
+        style={{
+          fontSize: "11px",
+          color: "#6b7280",
+          marginTop: "12px",
+          textAlign: "center",
+        }}
+      >
+        This is an educational planner only. It does not move money or provide
+        financial advice.
+      </footer>
     </div>
   );
 }
