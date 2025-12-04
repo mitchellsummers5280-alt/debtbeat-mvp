@@ -1,6 +1,21 @@
 "use client";
 
 import React, { useState, useMemo } from "react";
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+} from "recharts";
+
+import AIRecommendationCard from "../src/components/AIRecommendationCard";
+import {
+  generateAiRecommendation,
+  type AiRecommendation,
+} from "../aiRecommendations";
 
 // ----------------------------------------------------
 // Types
@@ -31,9 +46,43 @@ type PlanResult = {
   schedule: ScheduleRow[];
 };
 
+type ComparisonSummary = {
+  altStrategy: Strategy;
+  interestDiff: number; // positive = chosen saves interest
+  monthsDiff: number; // positive = chosen is faster
+};
+
+type WhatIfSummary = {
+  extraAmount: number;
+  newMonths: number;
+  interestSaved: number;
+  monthsSaved: number;
+};
+
 // ----------------------------------------------------
 // Helper functions
 // ----------------------------------------------------
+
+function getStrategyLabel(strategy: Strategy): string {
+  if (strategy === "warrior") return "The Warrior";
+  if (strategy === "rebel") return "The Rebel";
+  return "The Wizard";
+}
+
+function getAltStrategy(strategy: Strategy): Strategy {
+  if (strategy === "warrior") return "rebel";
+  if (strategy === "rebel") return "warrior";
+  // for wizard, compare vs highest APR style by default
+  return "rebel";
+}
+
+function formatCurrency(n: number): string {
+  return n.toLocaleString("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 2,
+  });
+}
 
 function pickNextDebtIndex(
   debts: { balance: number; apr: number }[],
@@ -108,7 +157,10 @@ function calculatePlan(
       const minPay = Math.max(0, isNaN(min) ? 0 : min);
 
       // first cover interest, then principal
-      const principal = Math.max(0, Math.min(bal[i] + interest, minPay) - interest);
+      const principal = Math.max(
+        0,
+        Math.min(bal[i] + interest, minPay) - interest
+      );
       bal[i] = Math.max(0, bal[i] + interest - principal);
     });
 
@@ -159,13 +211,112 @@ function calculatePlan(
   };
 }
 
-function formatCurrency(n: number): string {
-  return n.toLocaleString("en-US", {
-    style: "currency",
-    currency: "USD",
-    maximumFractionDigits: 2,
-  });
+// safe wrapper so our comparison helpers don't need to deal with error union
+function runPlanSafe(
+  debts: Debt[],
+  budget: number,
+  strategy: Strategy
+): PlanResult | null {
+  const res = calculatePlan(debts, budget.toString(), strategy);
+  if ("error" in res) return null;
+  return res;
 }
+
+function findIdealBudgetSimple(
+  debts: Debt[],
+  strategy: Strategy,
+  targetMonths: number
+): number | null {
+  if (!debts.length) return null;
+
+  const minBudget = debts.reduce(
+    (sum, d) => sum + (parseFloat(d.minPayment || "0") || 0),
+    0
+  );
+  if (!Number.isFinite(minBudget) || minBudget <= 0) return null;
+
+  const maxBudget = minBudget + 2000; // simple cap
+  let best: number | null = null;
+
+  for (let budget = minBudget; budget <= maxBudget; budget += 25) {
+    const plan = runPlanSafe(debts, budget, strategy);
+    if (!plan) break;
+    if (plan.months <= targetMonths) {
+      best = budget;
+      break;
+    }
+  }
+
+  return best;
+}
+
+// ----------------------------------------------------
+// Chart component
+// ----------------------------------------------------
+
+type BalanceChartProps = {
+  schedule: ScheduleRow[];
+};
+
+const BalanceChart: React.FC<BalanceChartProps> = ({ schedule }) => {
+  if (!schedule.length) return null;
+
+  const data = schedule.map((row) => ({
+    month: row.month,
+    balance: row.totalBalanceEnd,
+  }));
+
+  const yTickFormatter = (value: number) =>
+    value >= 1000 ? `${(value / 1000).toFixed(0)}k` : value.toFixed(0);
+
+  return (
+    <div
+      style={{
+        width: "100%",
+        height: 260,
+        background: "#020617",
+        borderRadius: "12px",
+        padding: "8px 8px 4px",
+        border: "1px solid #111827",
+      }}
+    >
+      <ResponsiveContainer width="100%" height="100%">
+        <LineChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 8 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
+          <XAxis
+            dataKey="month"
+            tick={{ fontSize: 10, fill: "#9ca3af" }}
+            stroke="#4b5563"
+          />
+          <YAxis
+            tick={{ fontSize: 10, fill: "#9ca3af" }}
+            stroke="#4b5563"
+            tickFormatter={yTickFormatter}
+          />
+          <Tooltip
+            cursor={{ stroke: "#4b5563", strokeWidth: 1 }}
+            contentStyle={{
+              backgroundColor: "#020617",
+              border: "1px solid #374151",
+              borderRadius: "8px",
+              fontSize: "11px",
+            }}
+            formatter={(value: any) => [formatCurrency(value as number), "Balance"]}
+            labelFormatter={(label) => `Month ${label}`}
+          />
+          <Line
+            type="monotone"
+            dataKey="balance"
+            stroke="#22c55e"
+            strokeWidth={2}
+            dot={false}
+            activeDot={{ r: 4 }}
+          />
+        </LineChart>
+      </ResponsiveContainer>
+    </div>
+  );
+};
 
 // ----------------------------------------------------
 // UI components
@@ -182,7 +333,7 @@ type StrategyButtonProps = {
 const StrategyButton: React.FC<StrategyButtonProps> = ({
   label,
   icon,
-  strategy,
+  strategy, // unused but kept for clarity / future
   active,
   onClick,
 }) => {
@@ -247,6 +398,14 @@ export default function Home() {
   const [recommendationNote, setRecommendationNote] = useState<string | null>(
     null
   );
+  const [aiRec, setAiRec] = useState<AiRecommendation | null>(null);
+
+  // saved snapshot for comparisons (debts + budget used)
+  const [savedDebts, setSavedDebts] = useState<Debt[] | null>(null);
+  const [lastBudgetUsed, setLastBudgetUsed] = useState<number | null>(null);
+
+  // what-if slider
+  const [extraPerMonth, setExtraPerMonth] = useState<number>(0);
 
   const totalRemaining = useMemo(
     () =>
@@ -256,6 +415,64 @@ export default function Home() {
       ),
     [debts]
   );
+
+  // --------------------------------------------------
+  // Derived insights (comparison, what-if, ideal budget)
+  // --------------------------------------------------
+
+  const comparisonSummary: ComparisonSummary | null = useMemo(() => {
+    if (!result || !savedDebts || lastBudgetUsed == null) return null;
+
+    const alt = getAltStrategy(result.strategyUsed);
+    const basePlan = runPlanSafe(savedDebts, lastBudgetUsed, result.strategyUsed);
+    const altPlan = runPlanSafe(savedDebts, lastBudgetUsed, alt);
+    if (!basePlan || !altPlan) return null;
+
+    const interestDiff = altPlan.totalInterest - basePlan.totalInterest;
+    const monthsDiff = altPlan.months - basePlan.months;
+
+    return {
+      altStrategy: alt,
+      interestDiff, // positive means chosen saves interest
+      monthsDiff, // positive means chosen is faster
+    };
+  }, [result, savedDebts, lastBudgetUsed]);
+
+  const whatIfSummary: WhatIfSummary | null = useMemo(() => {
+    if (!result || !savedDebts || lastBudgetUsed == null) return null;
+    if (extraPerMonth <= 0) return null;
+
+    const basePlan = runPlanSafe(savedDebts, lastBudgetUsed, result.strategyUsed);
+    const extraPlan = runPlanSafe(
+      savedDebts,
+      lastBudgetUsed + extraPerMonth,
+      result.strategyUsed
+    );
+    if (!basePlan || !extraPlan) return null;
+
+    return {
+      extraAmount: extraPerMonth,
+      newMonths: extraPlan.months,
+      interestSaved: basePlan.totalInterest - extraPlan.totalInterest,
+      monthsSaved: basePlan.months - extraPlan.months,
+    };
+  }, [result, savedDebts, lastBudgetUsed, extraPerMonth]);
+
+  const idealBudget = useMemo(() => {
+    if (!result || !savedDebts) return null;
+    // target ≈ 36 months (3 years)
+    return findIdealBudgetSimple(savedDebts, result.strategyUsed, 36);
+  }, [result, savedDebts]);
+
+  const scheduleToShow: ScheduleRow[] = useMemo(
+    () => (result ? result.schedule.slice(0, 24) : []),
+    [result]
+  );
+
+  const hasMoreMonths = result ? result.schedule.length > 24 : false;
+
+  // progress bar width (cap at $20k for visual)
+  const progressRatio = Math.min(totalRemaining / 20000, 1);
 
   // --------------------------------------------------
   // Handlers
@@ -300,6 +517,7 @@ export default function Home() {
     setResult(null);
     setShowSchedule(false);
     setRecommendationNote(null);
+    setAiRec(null);
 
     const nonEmpty = debts.filter(
       (d) =>
@@ -319,6 +537,18 @@ export default function Home() {
     }
 
     setResult(plan);
+    setSavedDebts(nonEmpty);
+    setLastBudgetUsed(parseFloat(monthlyBudget || "0") || 0);
+    setExtraPerMonth(0); // reset what-if slider on new run
+
+    // build AI recommendation for this result
+    const rec = generateAiRecommendation(
+      strategy,
+      nonEmpty.length,
+      plan.months,
+      plan.totalInterest
+    );
+    setAiRec(rec);
   };
 
   const handleRecommend = () => {
@@ -357,12 +587,7 @@ export default function Home() {
   const formattedSummary = () => {
     if (!result) return "";
     const years = result.months / 12;
-    const label =
-      result.strategyUsed === "warrior"
-        ? "The Warrior"
-        : result.strategyUsed === "rebel"
-        ? "The Rebel"
-        : "The Wizard";
+    const label = getStrategyLabel(result.strategyUsed);
 
     return `🔥 With ${label} strategy, you could be debt free in ${result.months.toFixed(
       0
@@ -370,16 +595,6 @@ export default function Home() {
       result.totalInterest
     )}.`;
   };
-
-  const scheduleToShow: ScheduleRow[] = useMemo(
-    () => (result ? result.schedule.slice(0, 24) : []),
-    [result]
-  );
-
-  const hasMoreMonths = result ? result.schedule.length > 24 : false;
-
-  // progress bar width (cap at $20k for visual)
-  const progressRatio = Math.min(totalRemaining / 20000, 1);
 
   // --------------------------------------------------
   // Render
@@ -755,6 +970,47 @@ export default function Home() {
             }}
           />
 
+          {/* What-if slider */}
+          <div
+            style={{
+              marginTop: "4px",
+              marginBottom: "16px",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                fontSize: "12px",
+                marginBottom: "4px",
+                color: "#9ca3af",
+              }}
+            >
+              <span>“What if I add extra each month?”</span>
+              <span style={{ color: "#bbf7d0" }}>
+                +${extraPerMonth.toFixed(0)}/mo
+              </span>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={500}
+              step={25}
+              value={extraPerMonth}
+              onChange={(e) => setExtraPerMonth(Number(e.target.value))}
+              style={{ width: "100%" }}
+            />
+            <div
+              style={{
+                fontSize: "11px",
+                color: "#6b7280",
+                marginTop: "2px",
+              }}
+            >
+              Adjust this after generating a plan to see time & interest saved.
+            </div>
+          </div>
+
           <button
             type="button"
             onClick={handleGeneratePlan}
@@ -819,6 +1075,143 @@ export default function Home() {
             >
               {formattedSummary()}
             </p>
+
+            {/* AI Recommendation Card */}
+            {aiRec && (
+              <div
+                style={{
+                  marginBottom: "16px",
+                }}
+              >
+                <AIRecommendationCard recommendation={aiRec} />
+              </div>
+            )}
+
+            {/* Interest/time comparison vs other strategy */}
+            {comparisonSummary && (
+              <div
+                style={{
+                  marginBottom: "12px",
+                  padding: "10px 12px",
+                  borderRadius: "12px",
+                  background: "#020617",
+                  border: "1px solid #1f2937",
+                  fontSize: "13px",
+                  color: "#d1d5db",
+                }}
+              >
+                {comparisonSummary.interestDiff > 0 ? (
+                  <p>
+                    ✅ Compared to{" "}
+                    <strong>
+                      {getStrategyLabel(comparisonSummary.altStrategy)}
+                    </strong>
+                    , your chosen strategy is projected to{" "}
+                    <strong>
+                      save {formatCurrency(comparisonSummary.interestDiff)} in
+                      interest
+                    </strong>{" "}
+                    and pay off{" "}
+                    <strong>
+                      {comparisonSummary.monthsDiff.toFixed(0)} months faster
+                    </strong>
+                    .
+                  </p>
+                ) : (
+                  <p>
+                    ⚠️{" "}
+                    <strong>
+                      {getStrategyLabel(comparisonSummary.altStrategy)}
+                    </strong>{" "}
+                    might save you more. It could reduce interest by{" "}
+                    <strong>
+                      {formatCurrency(
+                        Math.abs(comparisonSummary.interestDiff)
+                      )}
+                    </strong>{" "}
+                    and change payoff time by{" "}
+                    <strong>
+                      {Math.abs(comparisonSummary.monthsDiff).toFixed(0)} months
+                    </strong>
+                    .
+                  </p>
+                )}
+              </div>
+            )}
+
+            {/* What-if section */}
+            {whatIfSummary && (
+              <div
+                style={{
+                  marginBottom: "12px",
+                  padding: "10px 12px",
+                  borderRadius: "12px",
+                  background: "#022c22",
+                  border: "1px solid #16a34a",
+                  fontSize: "13px",
+                  color: "#dcfce7",
+                }}
+              >
+                <p>
+                  If you add{" "}
+                  <strong>
+                    {formatCurrency(whatIfSummary.extraAmount)}
+                  </strong>{" "}
+                  each month, you could be debt free in{" "}
+                  <strong>{whatIfSummary.newMonths.toFixed(0)} months</strong>{" "}
+                  instead of{" "}
+                  <strong>{result.months.toFixed(0)} months</strong>, saving
+                  about{" "}
+                  <strong>
+                    {formatCurrency(whatIfSummary.interestSaved)}
+                  </strong>{" "}
+                  in interest.
+                </p>
+              </div>
+            )}
+
+            {/* Ideal budget */}
+            {idealBudget && lastBudgetUsed != null && (
+              <div
+                style={{
+                  marginBottom: "12px",
+                  padding: "10px 12px",
+                  borderRadius: "12px",
+                  background: "#020617",
+                  border: "1px dashed #4b5563",
+                  fontSize: "13px",
+                  color: "#e5e7eb",
+                }}
+              >
+                <p>
+                  To be debt free in about <strong>3 years</strong>, you&apos;d
+                  need roughly{" "}
+                  <strong>{formatCurrency(idealBudget)}</strong> per month.
+                  You&apos;re currently modeling{" "}
+                  <strong>{formatCurrency(lastBudgetUsed)}</strong> per month.
+                </p>
+              </div>
+            )}
+
+            {/* Balance over time chart */}
+            <div
+              style={{
+                marginTop: "16px",
+                marginBottom: "16px",
+              }}
+            >
+              <h3
+                style={{
+                  fontSize: "14px",
+                  marginBottom: "8px",
+                  fontWeight: 500,
+                  color: "#e5e7eb",
+                }}
+              >
+                Balance over time
+              </h3>
+              <BalanceChart schedule={result.schedule} />
+            </div>
 
             <button
               type="button"
