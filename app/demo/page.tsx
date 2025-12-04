@@ -1,32 +1,59 @@
 "use client";
 
 import React from "react";
+import Link from "next/link";
+
 
 export default function DemoPage() {
   return (
-    <main
+  <main
+    style={{
+      minHeight: "100vh",
+      background: "#000",
+      color: "#f9fafb",
+    }}
+  >
+    <div
       style={{
-        minHeight: "100vh",
-        background: "#000",
-        color: "#f9fafb",
+        maxWidth: "960px",
+        margin: "0 auto",
+        padding: "24px 16px 48px",
       }}
     >
-      <div
-        style={{
-          maxWidth: "960px",
-          margin: "0 auto",
-          padding: "24px 16px 48px",
-        }}
-      >
-        <h1
+      <nav style={{ padding: "16px 0", display: "flex", gap: "16px" }}>
+        <Link
+          href="/"
           style={{
-            fontSize: "32px",
-            fontWeight: 800,
-            marginBottom: "12px",
+            color: "#9ca3af",
+            textDecoration: "none",
+            fontSize: "14px",
           }}
         >
-          Demo Screen
-        </h1>
+          Home
+        </Link>
+
+        <Link
+          href="/demo"
+          style={{
+            color: "#9ca3af",
+            textDecoration: "none",
+            fontSize: "14px",
+          }}
+        >
+          Demo Page
+        </Link>
+      </nav>
+
+      <h1
+        style={{
+          fontSize: "32px",
+          fontWeight: 800,
+          marginBottom: "12px",
+        }}
+      >
+        Demo Screen
+      </h1>
+
 
         <p
           style={{
