@@ -11,6 +11,8 @@ import {
   ResponsiveContainer,
 } from "recharts";
 
+import Link from "next/link";
+
 import AIRecommendationCard from "../src/components/AIRecommendationCard";
 import {
   generateAiRecommendation,
@@ -601,47 +603,73 @@ export default function Home() {
   // --------------------------------------------------
 
   return (
-    <main
+  <main
+    style={{
+      minHeight: "100vh",
+      background: "#000",
+      color: "#f9fafb",
+      fontFamily:
+        "-apple-system, system-ui, BlinkMacSystemFont, 'SF Pro Text', sans-serif",
+    }}
+  >
+
+    <nav style={{ padding: "16px 0", display: "flex", gap: "16px" }}>
+  <Link
+    href="/"
+    style={{
+      color: "#9ca3af",
+      textDecoration: "none",
+      fontSize: "14px",
+    }}
+  >
+    Home
+  </Link>
+
+  <Link
+    href="/demo"
+    style={{
+      color: "#9ca3af",
+      textDecoration: "none",
+      fontSize: "14px",
+    }}
+  >
+    Demo Page
+  </Link>
+</nav>
+
+
+    <div
       style={{
-        minHeight: "100vh",
-        background: "#000",
-        color: "#f9fafb",
-        fontFamily:
-          '-apple-system, system-ui, BlinkMacSystemFont, "SF Pro Text", sans-serif',
+        maxWidth: "960px",
+        margin: "0 auto",
+        padding: "24px 16px 48px",
+      }}
+    >    
+     <header style={{ textAlign: "center", marginBottom: "32px" }}>
+    <h1
+      style={{
+        fontSize: "36px",
+        fontWeight: 800,
+        marginBottom: "8px",
       }}
     >
-      <div
-        style={{
-          maxWidth: "960px",
-          margin: "0 auto",
-          padding: "24px 16px 48px",
-        }}
-      >
-        {/* HEADER */}
-        <header style={{ textAlign: "center", marginBottom: "32px" }}>
-          <h1
-            style={{
-              fontSize: "36px",
-              fontWeight: 800,
-              marginBottom: "8px",
-            }}
-          >
-            DebtBeat
-          </h1>
-          <p
-            style={{
-              color: "#9ca3af",
-              maxWidth: "520px",
-              margin: "0 auto",
-              fontSize: "14px",
-            }}
-          >
-            Add your credit cards, choose a strategy, and estimate your path to
-            being debt free.
-          </p>
-        </header>
+      DebtBeat
+    </h1>
 
-        {/* CARDS SECTION */}
+    <p
+      style={{
+        color: "#9ca3af",
+        maxWidth: "520px",
+        margin: "0 auto",
+        fontSize: "14px",
+      }}
+    >
+      Add your credit cards, choose a strategy, and estimate your path to being
+      debt free.
+    </p>
+  </header>
+
+
         <section
           style={{
             background: "#050816",
