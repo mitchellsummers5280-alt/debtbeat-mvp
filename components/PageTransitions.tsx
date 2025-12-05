@@ -1,14 +1,14 @@
 "use client";
 
-import React from "react";
+import type { ReactNode } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { usePathname } from "next/navigation";
 
-type Props = {
-  children: React.ReactNode;
+type PageTransitionProps = {
+  children: ReactNode;
 };
 
-export function PageTransition({ children }: Props) {
+export default function PageTransition({ children }: PageTransitionProps) {
   const pathname = usePathname();
 
   return (

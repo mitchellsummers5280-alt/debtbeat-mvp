@@ -303,8 +303,11 @@ const BalanceChart: React.FC<BalanceChartProps> = ({ schedule }) => {
               borderRadius: "8px",
               fontSize: "11px",
             }}
-            formatter={(value: any) => [formatCurrency(value as number), "Balance"]}
-            labelFormatter={(label) => `Month ${label}`}
+              formatter={(value: number | string) => [
+                formatCurrency(Number(value)),
+                "Balance",
+                ]}
+               labelFormatter={(label) => `Month ${label}`}
           />
           <Line
             type="monotone"
@@ -327,7 +330,6 @@ const BalanceChart: React.FC<BalanceChartProps> = ({ schedule }) => {
 type StrategyButtonProps = {
   label: string;
   icon: string;
-  strategy: Strategy;
   active: boolean;
   onClick: () => void;
 };
@@ -335,7 +337,6 @@ type StrategyButtonProps = {
 const StrategyButton: React.FC<StrategyButtonProps> = ({
   label,
   icon,
-  strategy, // unused but kept for clarity / future
   active,
   onClick,
 }) => {

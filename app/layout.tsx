@@ -4,7 +4,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
 import AuthProvider from "./AuthProvider";
-import UserMenu from "@/components/UserMenu"; // ⭐ add the menu
+import UserMenu from "@/components/UserMenu";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -18,7 +18,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "DebtBeat",
-  description: "A debt payoff planner that helps you become debt-free",
+  description: "A debt payoff planner that helps you become debt-free.",
 };
 
 export default function RootLayout({
@@ -28,19 +28,17 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className={`${geistSans.variable} ${geistMono.variable}`}>
+      <body
+        className={`${geistSans.variable} ${geistMono.variable} bg-black text-slate-50`}
+      >
         <AuthProvider>
-          {/* ⭐ NAVBAR */}
+          {/* Global app shell */}
           <header className="w-full flex justify-between items-center px-6 py-4 border-b border-neutral-800">
             <h1 className="text-2xl font-bold">DebtBeat</h1>
             <UserMenu />
           </header>
 
-          {/* ⭐ PAGE CONTENT */}
-          <main className="pt-4 px-4">
-            {/* <PageTransition>{children}</PageTransition> */}
-            {children}
-          </main>
+          <main className="pt-4 px-4">{children}</main>
         </AuthProvider>
       </body>
     </html>
