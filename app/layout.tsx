@@ -3,7 +3,6 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
-import PageTransition from "@/components/PageTransitions";
 import AuthProvider from "./AuthProvider";
 import UserMenu from "@/components/UserMenu"; // ⭐ add the menu
 
