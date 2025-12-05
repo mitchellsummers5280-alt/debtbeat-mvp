@@ -1,9 +1,9 @@
 // lib/auth.ts
-import { PrismaAdapter } from "@next-auth/prisma-adapter";
+import { PrismaAdapter } from "next-auth/prisma-adapter";
 import type { NextAuthOptions } from "next-auth";
 import GoogleProvider from "next-auth/providers/google";
 
-import { prisma } from "./prisma"; // <- make sure this path matches your prisma.ts
+import prisma from "./prisma"; // make sure this matches your prisma.ts export
 
 // Extend the session type on the client to include `id`
 declare module "next-auth" {
@@ -28,13 +28,10 @@ export const authOptions: NextAuthOptions = {
       clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
     }),
   ],
-  // 👇 add these 2 blocks
+
+  // simple debug flag is fine
   debug: process.env.NODE_ENV === "development",
-  events: {
-    error(message) {
-      console.error("NEXTAUTH ERROR EVENT:", message);
-    },
-  },
+
   callbacks: {
     async session({ session, user }) {
       if (session.user) {
@@ -44,4 +41,3 @@ export const authOptions: NextAuthOptions = {
     },
   },
 };
-
