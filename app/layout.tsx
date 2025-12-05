@@ -1,7 +1,11 @@
+// app/layout.tsx
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
-import { PageTransition } from "@/components/PageTransitions";
+
+import PageTransition from "@/components/PageTransitions";
+import AuthProvider from "./AuthProvider";
+import UserMenu from "@/components/UserMenu"; // ⭐ add the menu
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -20,13 +24,25 @@ export const metadata: Metadata = {
 
 export default function RootLayout({
   children,
-}: Readonly<{
+}: {
   children: React.ReactNode;
-}>) {
+}) {
   return (
     <html lang="en">
       <body className={`${geistSans.variable} ${geistMono.variable}`}>
-        <PageTransition>{children}</PageTransition>
+        <AuthProvider>
+          {/* ⭐ NAVBAR */}
+          <header className="w-full flex justify-between items-center px-6 py-4 border-b border-neutral-800">
+            <h1 className="text-2xl font-bold">DebtBeat</h1>
+            <UserMenu />
+          </header>
+
+          {/* ⭐ PAGE CONTENT */}
+          <main className="pt-4 px-4">
+            {/* <PageTransition>{children}</PageTransition> */}
+            {children}
+          </main>
+        </AuthProvider>
       </body>
     </html>
   );
