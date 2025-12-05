@@ -904,21 +904,18 @@ export default function Home() {
             <StrategyButton
               label="The Warrior"
               icon="⚔️"
-              strategy="warrior"
               active={strategy === "warrior"}
               onClick={() => setStrategy("warrior")}
             />
             <StrategyButton
               label="The Rebel"
               icon="🧨"
-              strategy="rebel"
               active={strategy === "rebel"}
               onClick={() => setStrategy("rebel")}
             />
             <StrategyButton
               label="The Wizard"
               icon="🧙‍♂️"
-              strategy="wizard"
               active={strategy === "wizard"}
               onClick={() => setStrategy("wizard")}
             />
