@@ -19,34 +19,21 @@ import {
   type AiRecommendation,
 } from "../aiRecommendations";
 
+import {
+  Strategy,
+  Debt,
+  PlanResult,
+  ScheduleRow,
+  runPlanSafe,
+  calculatePlan,
+  findIdealBudgetSimple,
+  formatCurrency,
+  getStrategyLabel,
+} from "@/lib/debtPlan";
+
 // ----------------------------------------------------
 // Types
 // ----------------------------------------------------
-
-type Strategy = "warrior" | "rebel" | "wizard";
-
-type Debt = {
-  id: number;
-  name: string;
-  // we store as string while typing, convert to number for math
-  balance: string;
-  apr: string;
-  minPayment: string;
-};
-
-type ScheduleRow = {
-  month: number;
-  totalBalanceEnd: number;
-  interestPaid: number;
-  principalPaid: number;
-};
-
-type PlanResult = {
-  months: number;
-  totalInterest: number;
-  strategyUsed: Strategy;
-  schedule: ScheduleRow[];
-};
 
 type ComparisonSummary = {
   altStrategy: Strategy;
@@ -61,195 +48,65 @@ type WhatIfSummary = {
   monthsSaved: number;
 };
 
+type DashboardSummary = {
+  totalDebt: number;
+  projectedMonths: number;
+  monthlyPayment: number;
+  interestSaved: number;
+  chartData: { monthLabel: string; balance: number }[];
+};
+
+// ----------------------------------------------------
+// Constants
+// ----------------------------------------------------
+
+const LIFETIME_YEARS = 100;
+const MONTHS_IN_YEAR = 12;
+const MAX_DEBT_FOR_BAR = 25000; // bar fills at $25k
+
 // ----------------------------------------------------
 // Helper functions
 // ----------------------------------------------------
 
-function getStrategyLabel(strategy: Strategy): string {
-  if (strategy === "warrior") return "The Warrior";
-  if (strategy === "rebel") return "The Rebel";
-  return "The Wizard";
+function saveDashboardSummary(summary: DashboardSummary) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem("debtbeat-dashboard", JSON.stringify(summary));
+  } catch (err) {
+    console.error("Failed to save dashboard summary", err);
+  }
 }
 
 function getAltStrategy(strategy: Strategy): Strategy {
   if (strategy === "warrior") return "rebel";
   if (strategy === "rebel") return "warrior";
-  // for wizard, compare vs highest APR style by default
   return "rebel";
 }
 
-function formatCurrency(n: number): string {
-  return n.toLocaleString("en-US", {
-    style: "currency",
-    currency: "USD",
-    maximumFractionDigits: 2,
-  });
-}
-
+// (currently not used, but kept for future logic if needed)
 function pickNextDebtIndex(
   debts: { balance: number; apr: number }[],
   strategy: Strategy
 ): number | null {
-  // Pick index of debt to target with extra payments
   const alive = debts
     .map((d, i) => ({ ...d, i }))
     .filter((d) => d.balance > 0);
 
-  if (alive.length === 0) return null;
+  if (!alive.length) return null;
 
   if (strategy === "warrior") {
-    // smallest balance first
     return alive.sort((a, b) => a.balance - b.balance)[0].i;
   }
   if (strategy === "rebel") {
-    // highest APR first
     return alive.sort((a, b) => b.apr - a.apr)[0].i;
   }
 
-  // wizard: blend of both (score = apr * 2 + balance weight)
   return alive
     .map((d) => ({
       ...d,
       score: d.apr * 2 + d.balance / 1000,
     }))
     .sort((a, b) => b.score - a.score)[0].i;
-}
-
-function calculatePlan(
-  debtsInput: Debt[],
-  monthlyBudgetStr: string,
-  strategy: Strategy
-): PlanResult | { error: string } {
-  const monthlyBudget = parseFloat(monthlyBudgetStr || "0");
-  if (!Number.isFinite(monthlyBudget) || monthlyBudget <= 0) {
-    return { error: "Please enter a positive monthly budget." };
-  }
-
-  const balances = debtsInput.map((d) => parseFloat(d.balance || "0"));
-  const aprs = debtsInput.map((d) => parseFloat(d.apr || "0"));
-  const mins = debtsInput.map((d) => parseFloat(d.minPayment || "0"));
-
-  const totalMin = mins.reduce((s, v) => s + (isNaN(v) ? 0 : v), 0);
-  if (totalMin > monthlyBudget + 1e-6) {
-    return {
-      error:
-        "Your total minimum payments are higher than your monthly budget. Increase your budget or adjust card data.",
-    };
-  }
-
-  const schedule: ScheduleRow[] = [];
-  let months = 0;
-  let totalInterest = 0;
-
-  // copy mutable balances
-  const bal = balances.map((v) => (isNaN(v) ? 0 : v));
-
-  const maxMonths = 600; // 50 years cap
-
-  while (months < maxMonths && bal.some((b) => b > 0.01)) {
-    months++;
-
-    // Compute base interest and min payments
-    let interestThisMonth = 0;
-    mins.forEach((min, i) => {
-      const apr = aprs[i] || 0;
-      const r = apr / 100 / 12;
-      const interest = bal[i] * r;
-      interestThisMonth += interest;
-      const minPay = Math.max(0, isNaN(min) ? 0 : min);
-
-      // first cover interest, then principal
-      const principal = Math.max(
-        0,
-        Math.min(bal[i] + interest, minPay) - interest
-      );
-      bal[i] = Math.max(0, bal[i] + interest - principal);
-    });
-
-    totalInterest += interestThisMonth;
-
-    // Remaining budget for extra payments
-    let remainingBudget =
-      monthlyBudget -
-      mins.reduce((s, v) => s + (isNaN(v) ? 0 : v), 0);
-
-    // Apply extra to a single targeted debt each month
-    while (remainingBudget > 0.01 && bal.some((b) => b > 0.01)) {
-      const idx = pickNextDebtIndex(
-        bal.map((b, i) => ({ balance: b, apr: aprs[i] || 0 })),
-        strategy
-      );
-      if (idx === null) break;
-
-      const extra = Math.min(remainingBudget, bal[idx]);
-      bal[idx] -= extra;
-      remainingBudget -= extra;
-    }
-
-    const totalBalanceEnd = bal.reduce((s, v) => s + v, 0);
-
-    schedule.push({
-      month: months,
-      totalBalanceEnd,
-      interestPaid: interestThisMonth,
-      principalPaid: monthlyBudget - interestThisMonth,
-    });
-
-    if (totalBalanceEnd <= 0.01) break;
-  }
-
-  if (months >= maxMonths) {
-    return {
-      error:
-        "At this payment level it would take more than 50 years to become debt free. Increase your budget.",
-    };
-  }
-
-  return {
-    months,
-    totalInterest,
-    schedule,
-    strategyUsed: strategy,
-  };
-}
-
-// safe wrapper so our comparison helpers don't need to deal with error union
-function runPlanSafe(
-  debts: Debt[],
-  budget: number,
-  strategy: Strategy
-): PlanResult | null {
-  const res = calculatePlan(debts, budget.toString(), strategy);
-  if ("error" in res) return null;
-  return res;
-}
-
-function findIdealBudgetSimple(
-  debts: Debt[],
-  strategy: Strategy,
-  targetMonths: number
-): number | null {
-  if (!debts.length) return null;
-
-  const minBudget = debts.reduce(
-    (sum, d) => sum + (parseFloat(d.minPayment || "0") || 0),
-    0
-  );
-  if (!Number.isFinite(minBudget) || minBudget <= 0) return null;
-
-  const maxBudget = minBudget + 2000; // simple cap
-  let best: number | null = null;
-
-  for (let budget = minBudget; budget <= maxBudget; budget += 25) {
-    const plan = runPlanSafe(debts, budget, strategy);
-    if (!plan) break;
-    if (plan.months <= targetMonths) {
-      best = budget;
-      break;
-    }
-  }
-
-  return best;
 }
 
 // ----------------------------------------------------
@@ -303,11 +160,11 @@ const BalanceChart: React.FC<BalanceChartProps> = ({ schedule }) => {
               borderRadius: "8px",
               fontSize: "11px",
             }}
-              formatter={(value: number | string) => [
-                formatCurrency(Number(value)),
-                "Balance",
-                ]}
-               labelFormatter={(label) => `Month ${label}`}
+            formatter={(value: number | string) => [
+              formatCurrency(Number(value)),
+              "Balance",
+            ]}
+            labelFormatter={(label) => `Month ${label}`}
           />
           <Line
             type="monotone"
@@ -409,6 +266,7 @@ export default function Home() {
 
   // what-if slider
   const [extraPerMonth, setExtraPerMonth] = useState<number>(0);
+  const [whatIfPlan, setWhatIfPlan] = useState<PlanResult | null>(null);
 
   const totalRemaining = useMemo(
     () =>
@@ -418,6 +276,9 @@ export default function Home() {
       ),
     [debts]
   );
+
+  // debt-size progress bar (caps at $25k)
+  const progressRatio = Math.min(totalRemaining / MAX_DEBT_FOR_BAR, 1);
 
   // --------------------------------------------------
   // Derived insights (comparison, what-if, ideal budget)
@@ -442,24 +303,16 @@ export default function Home() {
   }, [result, savedDebts, lastBudgetUsed]);
 
   const whatIfSummary: WhatIfSummary | null = useMemo(() => {
-    if (!result || !savedDebts || lastBudgetUsed == null) return null;
+    if (!result || !whatIfPlan) return null;
     if (extraPerMonth <= 0) return null;
-
-    const basePlan = runPlanSafe(savedDebts, lastBudgetUsed, result.strategyUsed);
-    const extraPlan = runPlanSafe(
-      savedDebts,
-      lastBudgetUsed + extraPerMonth,
-      result.strategyUsed
-    );
-    if (!basePlan || !extraPlan) return null;
 
     return {
       extraAmount: extraPerMonth,
-      newMonths: extraPlan.months,
-      interestSaved: basePlan.totalInterest - extraPlan.totalInterest,
-      monthsSaved: basePlan.months - extraPlan.months,
+      newMonths: whatIfPlan.months,
+      interestSaved: result.totalInterest - whatIfPlan.totalInterest,
+      monthsSaved: result.months - whatIfPlan.months,
     };
-  }, [result, savedDebts, lastBudgetUsed, extraPerMonth]);
+  }, [result, whatIfPlan, extraPerMonth]);
 
   const idealBudget = useMemo(() => {
     if (!result || !savedDebts) return null;
@@ -467,15 +320,17 @@ export default function Home() {
     return findIdealBudgetSimple(savedDebts, result.strategyUsed, 36);
   }, [result, savedDebts]);
 
-  const scheduleToShow: ScheduleRow[] = useMemo(
-    () => (result ? result.schedule.slice(0, 24) : []),
-    [result]
-  );
+  const scheduleToShow: ScheduleRow[] = useMemo(() => {
+    const plan = whatIfPlan ?? result;
+    if (!plan) return [];
+    return plan.schedule.slice(0, 24);
+  }, [result, whatIfPlan]);
 
-  const hasMoreMonths = result ? result.schedule.length > 24 : false;
-
-  // progress bar width (cap at $20k for visual)
-  const progressRatio = Math.min(totalRemaining / 20000, 1);
+  const hasMoreMonths = useMemo(() => {
+    const plan = whatIfPlan ?? result;
+    if (!plan) return false;
+    return plan.schedule.length > 24;
+  }, [result, whatIfPlan]);
 
   // --------------------------------------------------
   // Handlers
@@ -521,6 +376,8 @@ export default function Home() {
     setShowSchedule(false);
     setRecommendationNote(null);
     setAiRec(null);
+    setWhatIfPlan(null);
+    setExtraPerMonth(0);
 
     const nonEmpty = debts.filter(
       (d) =>
@@ -533,16 +390,18 @@ export default function Home() {
       return;
     }
 
-    const plan = calculatePlan(nonEmpty, monthlyBudget, strategy);
-    if ("error" in plan) {
-      setError(plan.error);
+    const planOrError = calculatePlan(nonEmpty, monthlyBudget, strategy);
+    if ("error" in planOrError) {
+      setError(planOrError.error);
       return;
     }
 
+    const plan = planOrError;
+
     setResult(plan);
     setSavedDebts(nonEmpty);
-    setLastBudgetUsed(parseFloat(monthlyBudget || "0") || 0);
-    setExtraPerMonth(0); // reset what-if slider on new run
+    const budgetNumber = parseFloat(monthlyBudget || "0") || 0;
+    setLastBudgetUsed(budgetNumber);
 
     // build AI recommendation for this result
     const rec = generateAiRecommendation(
@@ -552,6 +411,45 @@ export default function Home() {
       plan.totalInterest
     );
     setAiRec(rec);
+
+    // ----- Build and save dashboard summary -----
+    const totalDebt = nonEmpty.reduce(
+      (sum, d) => sum + (parseFloat(d.balance || "0") || 0),
+      0
+    );
+
+    const minBudget = nonEmpty.reduce(
+      (sum, d) => sum + (parseFloat(d.minPayment || "0") || 0),
+      0
+    );
+
+    let interestSaved = 0;
+    if (minBudget > 0 && budgetNumber >= minBudget) {
+      const minPlanOrError = calculatePlan(
+        nonEmpty,
+        minBudget.toString(),
+        strategy
+      );
+      if (!("error" in minPlanOrError)) {
+        interestSaved = Math.max(
+          0,
+          minPlanOrError.totalInterest - plan.totalInterest
+        );
+      }
+    }
+
+    const summary: DashboardSummary = {
+      totalDebt,
+      projectedMonths: plan.months,
+      monthlyPayment: budgetNumber,
+      interestSaved,
+      chartData: plan.schedule.map((row) => ({
+        monthLabel: `Month ${row.month}`,
+        balance: row.totalBalanceEnd,
+      })),
+    };
+
+    saveDashboardSummary(summary);
   };
 
   const handleRecommend = () => {
@@ -587,11 +485,53 @@ export default function Home() {
     setRecommendationNote(note);
   };
 
+  const handleExtraChange = (value: number) => {
+    setExtraPerMonth(value);
+
+    if (!result || !savedDebts || lastBudgetUsed == null || value <= 0) {
+      setWhatIfPlan(null);
+      return;
+    }
+
+    const extraBudget = lastBudgetUsed + value;
+    const extraPlan = runPlanSafe(
+      savedDebts,
+      extraBudget,
+      result.strategyUsed
+    );
+
+    if (!extraPlan) {
+      setWhatIfPlan(null);
+      return;
+    }
+
+    setWhatIfPlan(extraPlan);
+  };
+
   const formattedSummary = () => {
     if (!result) return "";
-    const years = result.months / 12;
+
+    const years = result.months / MONTHS_IN_YEAR;
+    const lifetimes = years / LIFETIME_YEARS;
     const label = getStrategyLabel(result.strategyUsed);
 
+    // CASE 1: More than 1 lifetime → show lifetimes only
+    if (years > LIFETIME_YEARS) {
+      return `🔥 With ${label} strategy, you could be debt free in about ${lifetimes.toFixed(
+        1
+      )} lifetimes. Estimated total interest paid: ${formatCurrency(
+        result.totalInterest
+      )}.`;
+    }
+
+    // CASE 2: Exactly 1 lifetime → "1 lifetime"
+    if (Math.abs(years - LIFETIME_YEARS) < 0.001) {
+      return `🔥 With ${label} strategy, you could be debt free in 1 lifetime. Estimated total interest paid: ${formatCurrency(
+        result.totalInterest
+      )}.`;
+    }
+
+    // CASE 3: Less than 1 lifetime → months + years
     return `🔥 With ${label} strategy, you could be debt free in ${result.months.toFixed(
       0
     )} months (~${years.toFixed(1)} years). Estimated total interest paid: ${formatCurrency(
@@ -603,74 +543,75 @@ export default function Home() {
   // Render
   // --------------------------------------------------
 
+  const activePlan = whatIfPlan ?? result;
+  const activeSchedule: ScheduleRow[] = activePlan?.schedule ?? [];
+
   return (
-  <main
-    style={{
-      minHeight: "100vh",
-      background: "#000",
-      color: "#f9fafb",
-      fontFamily:
-        "-apple-system, system-ui, BlinkMacSystemFont, 'SF Pro Text', sans-serif",
-    }}
-  >
-
-    <nav style={{ padding: "16px 0", display: "flex", gap: "16px" }}>
-  <Link
-    href="/"
-    style={{
-      color: "#9ca3af",
-      textDecoration: "none",
-      fontSize: "14px",
-    }}
-  >
-    Home
-  </Link>
-
-  <Link
-    href="/demo"
-    style={{
-      color: "#9ca3af",
-      textDecoration: "none",
-      fontSize: "14px",
-    }}
-  >
-    Demo Page
-  </Link>
-</nav>
-
-
-    <div
+    <main
       style={{
-        maxWidth: "960px",
-        margin: "0 auto",
-        padding: "24px 16px 48px",
-      }}
-    >    
-     <header style={{ textAlign: "center", marginBottom: "32px" }}>
-    <h1
-      style={{
-        fontSize: "36px",
-        fontWeight: 800,
-        marginBottom: "8px",
+        minHeight: "100vh",
+        background: "#000",
+        color: "#f9fafb",
+        fontFamily:
+          "-apple-system, system-ui, BlinkMacSystemFont, 'SF Pro Text', sans-serif",
       }}
     >
-      DebtBeat
-    </h1>
+      <nav style={{ padding: "16px 0", display: "flex", gap: "16px" }}>
+        <Link
+          href="/"
+          style={{
+            color: "#9ca3af",
+            textDecoration: "none",
+            fontSize: "14px",
+          }}
+        >
+          Home
+        </Link>
 
-    <p
-      style={{
-        color: "#9ca3af",
-        maxWidth: "520px",
-        margin: "0 auto",
-        fontSize: "14px",
-      }}
-    >
-      Add your credit cards, choose a strategy, and estimate your path to being
-      debt free.
-    </p>
-  </header>
+        <Link
+          href="/demo"
+          style={{
+            color: "#9ca3af",
+            textDecoration: "none",
+            fontSize: "14px",
+          }}
+        >
+          Demo Page
+        </Link>
+      </nav>
 
+      <div
+        style={{
+          maxWidth: "960px",
+          margin: "0 auto",
+          padding: "24px 16px 48px",
+        }}
+      >
+        <header style={{ textAlign: "center", marginBottom: "32px" }}>
+          <h1
+            style={{
+              fontSize: "36px",
+              fontWeight: 800,
+              marginBottom: "8px",
+            }}
+          >
+            DebtBeat
+          </h1>
 
+          <p
+            style={{
+              color: "#9ca3af",
+              maxWidth: "520px",
+              margin: "0 auto",
+              fontSize: "14px",
+            }}
+          >
+            Add your credit cards, choose a strategy, and estimate your path to
+            being debt free.
+          </p>
+        </header>
+
+        {/* CARDS */}
         <section
           style={{
             background: "#050816",
@@ -704,7 +645,7 @@ export default function Home() {
             <span>{formatCurrency(totalRemaining)}</span>
           </div>
 
-          {/* Progress bar */}
+          {/* Debt-size progress bar */}
           <div
             style={{
               width: "100%",
@@ -725,6 +666,7 @@ export default function Home() {
               }}
             />
           </div>
+
           <div
             style={{
               fontSize: "11px",
@@ -732,7 +674,8 @@ export default function Home() {
               marginBottom: "16px",
             }}
           >
-            Bar caps at $20,000 for visualization.
+            Progress reflects your total credit card debt. The bar fills at{" "}
+            {formatCurrency(MAX_DEBT_FOR_BAR)}.
           </div>
 
           {/* column labels for desktop */}
@@ -784,6 +727,7 @@ export default function Home() {
                 type="number"
                 inputMode="decimal"
                 placeholder="e.g. 5000"
+                min={0} // non-negative; no upper limit
                 value={d.balance}
                 onChange={(e) =>
                   handleDebtChange(d.id, "balance", e.target.value)
@@ -804,6 +748,7 @@ export default function Home() {
                 inputMode="decimal"
                 step="0.01"
                 placeholder="e.g. 24.99"
+                min={0} // any APR, no cap
                 value={d.apr}
                 onChange={(e) =>
                   handleDebtChange(d.id, "apr", e.target.value)
@@ -823,6 +768,8 @@ export default function Home() {
                 type="number"
                 inputMode="decimal"
                 placeholder="e.g. 75"
+                step="0.01"
+                min={0} // no cap on min payment
                 value={d.minPayment}
                 onChange={(e) =>
                   handleDebtChange(d.id, "minPayment", e.target.value)
@@ -1023,7 +970,7 @@ export default function Home() {
               max={500}
               step={25}
               value={extraPerMonth}
-              onChange={(e) => setExtraPerMonth(Number(e.target.value))}
+              onChange={(e) => handleExtraChange(Number(e.target.value))}
               style={{ width: "100%" }}
             />
             <div
@@ -1033,7 +980,8 @@ export default function Home() {
                 marginTop: "2px",
               }}
             >
-              Adjust this after generating a plan to see time & interest saved.
+              Adjust this after generating a plan to see time & interest saved —
+              and watch the payoff curve change.
             </div>
           </div>
 
@@ -1214,7 +1162,8 @@ export default function Home() {
                   need roughly{" "}
                   <strong>{formatCurrency(idealBudget)}</strong> per month.
                   You&apos;re currently modeling{" "}
-                  <strong>{formatCurrency(lastBudgetUsed)}</strong> per month.
+                  <strong>{formatCurrency(lastBudgetUsed ?? 0)}</strong> per
+                  month.
                 </p>
               </div>
             )}
@@ -1236,7 +1185,7 @@ export default function Home() {
               >
                 Balance over time
               </h3>
-              <BalanceChart schedule={result.schedule} />
+              <BalanceChart schedule={activeSchedule} />
             </div>
 
             <button

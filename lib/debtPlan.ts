@@ -30,6 +30,18 @@ export type PlanResult = {
 };
 
 // ----------------------------------------------------
+// Lifetime constants
+// ----------------------------------------------------
+
+const LIFETIME_YEARS = 100;
+const MONTHS_IN_YEAR = 12;
+
+// This is ONLY a safety cap to prevent infinite loops in extreme edge cases.
+// 1,000 lifetimes = 100,000 years = 1,200,000 months (effectively unlimited).
+const MAX_LIFETIMES = 1000;
+const MAX_MONTHS = LIFETIME_YEARS * MONTHS_IN_YEAR * MAX_LIFETIMES;
+
+// ----------------------------------------------------
 // Formatting helpers
 // ----------------------------------------------------
 
@@ -48,53 +60,58 @@ export function formatCurrency(n: number): string {
 }
 
 // ----------------------------------------------------
-// Core payoff math
+// Internal helpers
 // ----------------------------------------------------
 
-function pickNextDebtIndex(
-  debts: { balance: number; apr: number }[],
-  strategy: Strategy
-): number | null {
-  // Pick index of debt to target with extra payments
-  const alive = debts
-    .map((d, i) => ({ ...d, i }))
-    .filter((d) => d.balance > 0);
-
-  if (alive.length === 0) return null;
-
-  if (strategy === "warrior") {
-    // smallest balance first
-    return alive.sort((a, b) => a.balance - b.balance)[0].i;
-  }
-  if (strategy === "rebel") {
-    // highest APR first
-    return alive.sort((a, b) => b.apr - a.apr)[0].i;
-  }
-
-  // wizard: blend of both (score = apr * 2 + balance weight)
-  return alive
-    .map((d) => ({
-      ...d,
-      score: d.apr * 2 + d.balance / 1000,
-    }))
-    .sort((a, b) => b.score - a.score)[0].i;
+function parseNum(value: string): number {
+  const n = parseFloat(value || "0");
+  return Number.isFinite(n) ? n : 0;
 }
 
+type NumericDebt = {
+  id: number;
+  name: string;
+  balance: number;
+  apr: number;
+  minPayment: number;
+};
+
+function cloneNumericDebts(input: Debt[]): NumericDebt[] {
+  return input
+    .map((d) => ({
+      id: d.id,
+      name: d.name || `Card ${d.id}`,
+      balance: Math.max(0, parseNum(d.balance)),
+      apr: Math.max(0, parseNum(d.apr)),
+      minPayment: Math.max(0, parseNum(d.minPayment)),
+    }))
+    .filter((d) => d.balance > 0 && d.minPayment > 0);
+}
+
+// ----------------------------------------------------
+// Core payoff math (matches demo engine behaviour)
+// ----------------------------------------------------
+
+// strategy mapping here:
+// - warrior: smallest balance first (snowball / motivation)
+// - rebel:   highest APR first (avalanche / interest savings)
+// - wizard:  interest-optimized (targets biggest interest cost)
 export function calculatePlan(
   debtsInput: Debt[],
   monthlyBudgetStr: string,
   strategy: Strategy
 ): PlanResult | { error: string } {
-  const monthlyBudget = parseFloat(monthlyBudgetStr || "0");
+  const monthlyBudget = parseNum(monthlyBudgetStr);
   if (!Number.isFinite(monthlyBudget) || monthlyBudget <= 0) {
     return { error: "Please enter a positive monthly budget." };
   }
 
-  const balances = debtsInput.map((d) => parseFloat(d.balance || "0"));
-  const aprs = debtsInput.map((d) => parseFloat(d.apr || "0"));
-  const mins = debtsInput.map((d) => parseFloat(d.minPayment || "0"));
+  const debts = cloneNumericDebts(debtsInput);
+  if (debts.length === 0) {
+    return { error: "Add at least one card with a balance and minimum payment." };
+  }
 
-  const totalMin = mins.reduce((s, v) => s + (isNaN(v) ? 0 : v), 0);
+  const totalMin = debts.reduce((sum, d) => sum + d.minPayment, 0);
   if (totalMin > monthlyBudget + 1e-6) {
     return {
       error:
@@ -102,81 +119,165 @@ export function calculatePlan(
     };
   }
 
+  const workingDebts: NumericDebt[] = debts.map((d) => ({ ...d }));
+
   const schedule: ScheduleRow[] = [];
   let months = 0;
-  let totalInterest = 0;
+  let totalInterestAllTime = 0;
 
-  // copy mutable balances
-  const bal = balances.map((v) => (isNaN(v) ? 0 : v));
+  // Safety cap only: effectively unlimited for real-world numbers
+  const maxMonths = MAX_MONTHS;
 
-  const maxMonths = 600; // 50 years cap
-
-  while (months < maxMonths && bal.some((b) => b > 0.01)) {
+  while (months < maxMonths && workingDebts.some((d) => d.balance > 0.01)) {
     months++;
 
-    // Compute base interest and min payments
-    let interestThisMonth = 0;
-    mins.forEach((min, i) => {
-      const apr = aprs[i] || 0;
-      const r = apr / 100 / 12;
-      const interest = bal[i] * r;
-      interestThisMonth += interest;
-      const minPay = Math.max(0, isNaN(min) ? 0 : min);
+    const interestByIndex: number[] = new Array(workingDebts.length).fill(0);
+    const minDueByIndex: number[] = new Array(workingDebts.length).fill(0);
+    const totalPaymentByIndex: number[] = new Array(workingDebts.length).fill(0);
+    const extraByIndex: number[] = new Array(workingDebts.length).fill(0);
 
-      // first cover interest, then principal
-      const principal = Math.max(
-        0,
-        Math.min(bal[i] + interest, minPay) - interest
-      );
-      bal[i] = Math.max(0, bal[i] + interest - principal);
+    let sumMinDue = 0;
+    let totalBalanceStart = 0;
+    let interestThisMonth = 0;
+
+    // 1) Compute interest + minimum due for each card THIS month
+    workingDebts.forEach((d, i) => {
+      if (d.balance <= 0.01) {
+        interestByIndex[i] = 0;
+        minDueByIndex[i] = 0;
+        return;
+      }
+
+      const r = d.apr / 100 / 12;
+      const interest = d.balance * r;
+      const minDue = Math.min(d.minPayment, d.balance + interest);
+
+      interestByIndex[i] = interest;
+      minDueByIndex[i] = minDue;
+
+      sumMinDue += minDue;
+      totalBalanceStart += d.balance;
+      interestThisMonth += interest;
     });
 
-    totalInterest += interestThisMonth;
+    // budget minus this month’s true minimums
+    let leftover = Math.max(0, monthlyBudget - sumMinDue);
 
-    // Remaining budget for extra payments
-    let remainingBudget =
-      monthlyBudget -
-      mins.reduce((s, v) => s + (isNaN(v) ? 0 : v), 0);
+    // 2) Start with everyone just getting their minimum
+    workingDebts.forEach((_, i) => {
+      totalPaymentByIndex[i] = minDueByIndex[i];
+      extraByIndex[i] = 0;
+    });
 
-    // Apply extra to a single targeted debt each month
-    while (remainingBudget > 0.01 && bal.some((b) => b > 0.01)) {
-      const idx = pickNextDebtIndex(
-        bal.map((b, i) => ({ balance: b, apr: aprs[i] || 0 })),
-        strategy
-      );
-      if (idx === null) break;
+    // 3) Allocate leftover based on strategy priority
+    type PriorityItem = { i: number; balance: number; apr: number; interest: number };
 
-      const extra = Math.min(remainingBudget, bal[idx]);
-      bal[idx] -= extra;
-      remainingBudget -= extra;
+    const priorityList: PriorityItem[] = workingDebts
+      .map((d, i) => ({
+        i,
+        balance: d.balance,
+        apr: d.apr,
+        interest: (d.apr / 100 / 12) * d.balance || 0,
+      }))
+      .filter((p) => p.balance > 0.01);
+
+    priorityList.sort((a, b) => {
+      switch (strategy) {
+        case "warrior":
+          // smallest balance first (snowball)
+          if (a.balance !== b.balance) return a.balance - b.balance;
+          return b.apr - a.apr;
+        case "rebel":
+          // highest APR first (avalanche)
+          if (b.apr !== a.apr) return b.apr - a.apr;
+          return b.balance - a.balance;
+        case "wizard":
+          // interest-optimized: biggest interest cost first
+          if (b.interest !== a.interest) return b.interest - a.interest;
+          return b.apr - a.apr;
+        default:
+          return 0;
+      }
+    });
+
+    while (leftover > 0.01) {
+      let allocatedThisPass = 0;
+
+      for (const item of priorityList) {
+        const idx = item.i;
+        const d = workingDebts[idx];
+        if (d.balance <= 0.01 || leftover <= 0.01) continue;
+
+        const interest = interestByIndex[idx] ?? 0;
+        const alreadyPaying = totalPaymentByIndex[idx] ?? 0;
+        const maxNeeded = d.balance + interest - alreadyPaying;
+
+        if (maxNeeded <= 0.01) continue;
+
+        const extraForThisDebt = Math.min(maxNeeded, leftover);
+        if (extraForThisDebt <= 0.001) continue;
+
+        extraByIndex[idx] += extraForThisDebt;
+        totalPaymentByIndex[idx] = alreadyPaying + extraForThisDebt;
+
+        leftover -= extraForThisDebt;
+        allocatedThisPass += extraForThisDebt;
+      }
+
+      if (allocatedThisPass <= 0.001) {
+        // couldn't meaningfully allocate leftover; avoid infinite loop
+        break;
+      }
     }
 
-    const totalBalanceEnd = bal.reduce((s, v) => s + v, 0);
+    // 4) Apply payments and update balances
+    let totalBalanceEnd = 0;
+    let totalPrincipalThisMonth = 0;
+
+    workingDebts.forEach((d, i) => {
+      const startBal = d.balance;
+      const interest = interestByIndex[i] ?? 0;
+      const totalPay = totalPaymentByIndex[i] ?? 0;
+
+      const principalPaid = Math.max(0, totalPay - interest);
+      let newBalance = startBal + interest - totalPay;
+      if (newBalance < 0) newBalance = 0;
+
+      d.balance = newBalance;
+
+      totalBalanceEnd += newBalance;
+      totalPrincipalThisMonth += principalPaid;
+    });
+
+    totalInterestAllTime += interestThisMonth;
 
     schedule.push({
       month: months,
       totalBalanceEnd,
       interestPaid: interestThisMonth,
-      principalPaid: monthlyBudget - interestThisMonth,
+      principalPaid: totalPrincipalThisMonth,
     });
 
     if (totalBalanceEnd <= 0.01) break;
   }
 
   if (months >= maxMonths) {
-    return {
-      error:
-        "At this payment level it would take more than 50 years to become debt free. Increase your budget.",
-    };
-  }
+  return {
+    error: `At this payment level it would take more than ${MAX_LIFETIMES.toLocaleString()} lifetimes to become debt free. Increase your budget.`,
+  };
+}
 
   return {
     months,
-    totalInterest,
+    totalInterest: totalInterestAllTime,
     schedule,
     strategyUsed: strategy,
   };
 }
+
+// ----------------------------------------------------
+// Helpers used elsewhere
+// ----------------------------------------------------
 
 // safe wrapper so other helpers don't need to deal with error union
 export function runPlanSafe(
@@ -198,12 +299,12 @@ export function findIdealBudgetSimple(
   if (!debts.length) return null;
 
   const minBudget = debts.reduce(
-    (sum, d) => sum + (parseFloat(d.minPayment || "0") || 0),
+    (sum, d) => sum + (parseNum(d.minPayment) || 0),
     0
   );
   if (!Number.isFinite(minBudget) || minBudget <= 0) return null;
 
-  const maxBudget = minBudget + 2000; // simple cap
+  const maxBudget = minBudget + 2000; // simple cap for search space
   let best: number | null = null;
 
   for (let budget = minBudget; budget <= maxBudget; budget += 25) {

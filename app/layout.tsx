@@ -38,7 +38,8 @@ export default function RootLayout({
             <UserMenu />
           </header>
 
-          <main className="pt-4 px-4">{children}</main>
+          {/* Each page (/, /demo, /dashboard) controls its own layout */}
+          {children}
         </AuthProvider>
       </body>
     </html>
