@@ -1,7 +1,7 @@
 // app/layout.tsx
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
-import Link from "next/link";        // ← ADD THIS LINE
+import Link from "next/link";
 import "./globals.css";
 
 import AuthProvider from "./AuthProvider";
@@ -58,8 +58,7 @@ export default function RootLayout({
             <UserMenu />
           </header>
 
-
-          {/* Each page (/, /demo, /dashboard) controls its own layout */}
+          {/* Each page (/ , /demo, /dashboard, /info) controls its own layout */}
           {children}
         </AuthProvider>
       </body>
