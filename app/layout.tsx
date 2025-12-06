@@ -38,8 +38,8 @@ export default function RootLayout({
             <div className="flex items-center gap-8">
               <h1 className="text-2xl font-bold">DebtBeat</h1>
 
-              {/* Navigation */}
-              <nav className="hidden md:flex items-center gap-6 text-sm text-slate-300">
+              {/* Navigation – visible on all screen sizes */}
+              <nav className="flex items-center gap-6 text-sm text-slate-300">
                 <Link href="/" className="hover:text-emerald-300">
                   Home
                 </Link>
