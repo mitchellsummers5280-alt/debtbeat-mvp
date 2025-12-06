@@ -34,9 +34,29 @@ export default function RootLayout({
         <AuthProvider>
           {/* Global app shell */}
           <header className="w-full flex justify-between items-center px-6 py-4 border-b border-neutral-800">
-            <h1 className="text-2xl font-bold">DebtBeat</h1>
+            <div className="flex items-center gap-8">
+              <h1 className="text-2xl font-bold">DebtBeat</h1>
+
+              {/* Navigation */}
+              <nav className="hidden md:flex items-center gap-6 text-sm text-slate-300">
+                <Link href="/" className="hover:text-emerald-300">
+                  Home
+                </Link>
+                <Link href="/demo" className="hover:text-emerald-300">
+                  Demo Page
+                </Link>
+                <Link href="/dashboard" className="hover:text-emerald-300">
+                  Dashboard
+                </Link>
+                <Link href="/info" className="hover:text-emerald-300">
+                  Info
+                </Link>
+              </nav>
+            </div>
+
             <UserMenu />
           </header>
+
 
           {/* Each page (/, /demo, /dashboard) controls its own layout */}
           {children}
