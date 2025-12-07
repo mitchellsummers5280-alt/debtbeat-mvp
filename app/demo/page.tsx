@@ -328,34 +328,18 @@ export default function DebtPayoffPlannerDemoPage() {
     <div className="flex w-full justify-center px-4 py-10 text-slate-100">
       <div className="flex w-full max-w-5xl flex-col gap-8">
         {/* Header */}
-        <header className="flex flex-col items-center gap-3 text-center">
-          <div className="inline-flex w-fit items-center gap-2 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-3 py-1 text-[11px] font-medium text-emerald-200">
-            <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-400" />
-            Demo view · Mirroring your Home plan
-          </div>
-
+        <header className="flex flex-col items-center gap-2 text-center">
           <h1 className="text-3xl font-bold tracking-tight">
-            DebtBeat Payoff Planner (Demo)
+            Your<span className="text-emerald-400">Plan</span>
           </h1>
 
-          <p className="max-w-2xl text-sm text-slate-300">
-            This demo shows a{" "}
-            <span className="font-semibold text-emerald-300">
-              read-only view
-            </span>{" "}
-            of your DebtBeat plan. All numbers come from the{" "}
-            <span className="font-semibold">Home</span> page.
+          <p className="text-sm text-slate-300 max-w-xl">
+            Your personalized debt-free roadmap based on the details you entered on the
+            <span className="font-semibold text-emerald-300"> Home </span> page.
           </p>
 
-          <p className="text-xs text-slate-400">
-            To change debts, strategy, or budget,{" "}
-            <Link
-              href="/"
-              className="font-semibold text-emerald-300 hover:text-emerald-200"
-            >
-              go back to the main planner
-            </Link>
-            .
+          <p className="text-xs text-slate-500">
+            To make updates, return to the Home page.
           </p>
         </header>
 
@@ -456,11 +440,10 @@ export default function DebtPayoffPlannerDemoPage() {
                     return (
                       <div
                         key={s}
-                        className={`flex h-12 w-12 items-center justify-center rounded-full border text-2xl ${
-                          selected
-                            ? "border-emerald-400 bg-emerald-500/10 shadow-[0_0_0_1px_rgba(16,185,129,0.4)]"
-                            : "border-slate-700 bg-slate-900/80 opacity-40"
-                        }`}
+                        className={`flex h-12 w-12 items-center justify-center rounded-full border text-2xl ${selected
+                          ? "border-emerald-400 bg-emerald-500/10 shadow-[0_0_0_1px_rgba(16,185,129,0.4)]"
+                          : "border-slate-700 bg-slate-900/80 opacity-40"
+                          }`}
                         aria-label={s}
                       >
                         {STRATEGY_ICONS[s]}
@@ -694,15 +677,15 @@ export default function DebtPayoffPlannerDemoPage() {
               {schedule.length > 0 && (
                 <div className="text-xs text-slate-300">
                   Starting total balance:{" "}
-                    <span className="font-semibold text-emerald-300">
-                      ${totalBalanceStart.toFixed(2)}
-                    </span>
+                  <span className="font-semibold text-emerald-300">
+                    ${totalBalanceStart.toFixed(2)}
+                  </span>
                   <br />
                   Months to payoff:{" "}
-                    <span className="font-semibold text-emerald-300">
-                      {payoffMonths} month
-                      {payoffMonths === 1 ? "" : "s"}
-                    </span>
+                  <span className="font-semibold text-emerald-300">
+                    {payoffMonths} month
+                    {payoffMonths === 1 ? "" : "s"}
+                  </span>
                 </div>
               )}
             </div>
