@@ -1,11 +1,11 @@
 // app/layout.tsx
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
-import Link from "next/link";
 import "./globals.css";
 
 import AuthProvider from "./AuthProvider";
-import UserMenu from "@/components/UserMenu";
+import { DebtProvider } from "@/lib/debtStore";
+import { MainHeader } from "@/components/MainHeader";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -30,36 +30,13 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body
-        className={`${geistSans.variable} ${geistMono.variable} bg-black text-slate-50`}
+        className={`${geistSans.variable} ${geistMono.variable} bg-slate-950 text-slate-50`}
       >
         <AuthProvider>
-          {/* Global app shell */}
-          <header className="w-full flex justify-between items-center px-6 py-4 border-b border-neutral-800">
-            <div className="flex items-center gap-8">
-              <h1 className="text-2xl font-bold">DebtBeat</h1>
-
-              {/* Navigation – visible on all screen sizes */}
-              <nav className="flex items-center gap-6 text-sm text-slate-300">
-                <Link href="/" className="hover:text-emerald-300">
-                  Home
-                </Link>
-                <Link href="/demo" className="hover:text-emerald-300">
-                  Demo Page
-                </Link>
-                <Link href="/dashboard" className="hover:text-emerald-300">
-                  Dashboard
-                </Link>
-                <Link href="/info" className="hover:text-emerald-300">
-                  Info
-                </Link>
-              </nav>
-            </div>
-
-            <UserMenu />
-          </header>
-
-          {/* Each page (/ , /demo, /dashboard, /info) controls its own layout */}
-          {children}
+          <DebtProvider>
+            <MainHeader />
+            <main className="min-h-screen">{children}</main>
+          </DebtProvider>
         </AuthProvider>
       </body>
     </html>

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState, useEffect } from "react";
+import { useMemo } from "react";
 import Link from "next/link";
 import {
   LineChart,
@@ -13,19 +13,11 @@ import {
   Legend,
 } from "recharts";
 
-// ----------------------------------------------------
-// Types
-// ----------------------------------------------------
+import { useDebtStore, Strategy, EditableDebt } from "@/lib/debtStore";
 
-type Strategy = "warrior" | "rebel" | "wizard";
-
-type EditableDebt = {
-  id: number;
-  name: string;
-  balance: string; // as typed by user
-  apr: string; // %
-  minPayment: string;
-};
+// ----------------------------------------------------
+// Types (local)
+// ----------------------------------------------------
 
 type Debt = {
   id: number;
@@ -48,20 +40,13 @@ type MonthlyDebtPayment = {
 };
 
 type ScheduleMonth = {
-  monthIndex: number; // 1-based
+  monthIndex: number;
   totalPayment: number;
   totalInterest: number;
   totalPrincipal: number;
   totalBalanceStart: number;
   totalBalanceEnd: number;
   payments: MonthlyDebtPayment[];
-};
-
-type PlanSnapshot = {
-  debts: EditableDebt[];
-  strategy: Strategy;
-  // NOTE: this is actually TOTAL monthly budget now, name kept for backwards compat
-  extraPerMonth: string;
 };
 
 // ----------------------------------------------------
@@ -91,7 +76,7 @@ function cloneDebts(editableDebts: EditableDebt[]): Debt[] {
     .filter((d) => d.balance > 0 && d.minPayment > 0);
 }
 
-// Core payoff schedule — semantics MATCH lib/debtPlan
+// Core payoff schedule (same logic as lib/debtPlan)
 function buildSchedule(
   inputDebts: EditableDebt[],
   strategy: Strategy,
@@ -112,7 +97,6 @@ function buildSchedule(
     const activeDebts = workingDebts.filter((d) => d.balance > 0.01);
     if (activeDebts.length === 0) break;
 
-    // 1) Interest + mins this month
     const interestById = new Map<number, number>();
     const minDueById = new Map<number, number>();
 
@@ -137,13 +121,10 @@ function buildSchedule(
       totalBalanceStart += d.balance;
     }
 
-    if (sumMinDue > monthlyBudget + 1e-6) {
-      break;
-    }
+    if (sumMinDue > monthlyBudget + 1e-6) break;
 
     let leftover = Math.max(0, monthlyBudget - sumMinDue);
 
-    // 2) everyone gets their min
     const extraById = new Map<number, number>();
     const totalPaymentById = new Map<number, number>();
 
@@ -153,7 +134,6 @@ function buildSchedule(
       totalPaymentById.set(d.id, minDue);
     }
 
-    // 3) allocate leftover using same mapping as lib/debtPlan
     type PriorityItem = {
       id: number;
       balance: number;
@@ -173,15 +153,12 @@ function buildSchedule(
     priorityList.sort((a, b) => {
       switch (strategy) {
         case "warrior":
-          // Smallest balance first (snowball / motivation)
           if (a.balance !== b.balance) return a.balance - b.balance;
           return b.apr - a.apr;
         case "rebel":
-          // Highest APR first (avalanche / interest savings)
           if (b.apr !== a.apr) return b.apr - a.apr;
           return b.balance - a.balance;
         case "wizard":
-          // Interest-optimized: biggest interest cost first
           if (b.interest !== a.interest) return b.interest - a.interest;
           return b.apr - a.apr;
         default:
@@ -216,7 +193,6 @@ function buildSchedule(
       if (allocatedThisPass <= 0.001) break;
     }
 
-    // 4) finalize month
     let totalPayment = 0;
     let totalInterest = 0;
     let totalPrincipal = 0;
@@ -309,58 +285,21 @@ function getStrategyShortInstructions(strategy: Strategy): string[] {
 }
 
 // ----------------------------------------------------
-// Main Component
+// Main Component – read-only mirror of Home
 // ----------------------------------------------------
 
-const initialDebts: EditableDebt[] = [
-  { id: 1, name: "Discover", balance: "2500", apr: "23.99", minPayment: "75" },
-  { id: 2, name: "Capital One", balance: "1800", apr: "19.99", minPayment: "55" },
-  { id: 3, name: "Chase", balance: "3200", apr: "21.49", minPayment: "95" },
-];
-
-const STORAGE_KEY = "debtbeat-demo-plan";
-
 export default function DebtPayoffPlannerDemoPage() {
-  const [debts, setDebts] = useState<EditableDebt[]>(() => {
-    if (typeof window === "undefined") return initialDebts;
-    try {
-      const raw = window.localStorage.getItem(STORAGE_KEY);
-      if (!raw) return initialDebts;
-      const parsed = JSON.parse(raw) as PlanSnapshot;
-      return parsed.debts && parsed.debts.length > 0 ? parsed.debts : initialDebts;
-    } catch {
-      return initialDebts;
-    }
-  });
-
-  const [strategy, setStrategy] = useState<Strategy>(() => {
-    if (typeof window === "undefined") return "warrior";
-    try {
-      const raw = window.localStorage.getItem(STORAGE_KEY);
-      if (!raw) return "warrior";
-      const parsed = JSON.parse(raw) as PlanSnapshot;
-      return parsed.strategy ?? "warrior";
-    } catch {
-      return "warrior";
-    }
-  });
-
-  // NOTE: this is TOTAL monthly budget now
-  const [extraPerMonth, setExtraPerMonth] = useState<string>(() => {
-    if (typeof window === "undefined") return "300";
-    try {
-      const raw = window.localStorage.getItem(STORAGE_KEY);
-      if (!raw) return "300";
-      const parsed = JSON.parse(raw) as PlanSnapshot;
-      return parsed.extraPerMonth ?? "300";
-    } catch {
-      return "300";
-    }
-  });
+  const { state } = useDebtStore();
+  const debts = state.debts;
+  const strategy = state.strategy;
+  const monthlyBudgetRaw =
+    state.extraBudget && state.extraBudget > 0
+      ? state.extraBudget.toString()
+      : "0";
 
   const schedule = useMemo(
-    () => buildSchedule(debts, strategy, extraPerMonth),
-    [debts, strategy, extraPerMonth]
+    () => buildSchedule(debts, strategy, monthlyBudgetRaw),
+    [debts, strategy, monthlyBudgetRaw]
   );
 
   const nextMonth = schedule[0] ?? null;
@@ -380,90 +319,50 @@ export default function DebtPayoffPlannerDemoPage() {
     totalBalance: Number(m.totalBalanceEnd.toFixed(2)),
   }));
 
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const snapshot: PlanSnapshot = {
-      debts,
-      strategy,
-      extraPerMonth,
-    };
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
-  }, [debts, strategy, extraPerMonth]);
-
-  const handleDebtChange = (
-    id: number,
-    field: keyof EditableDebt,
-    value: string
-  ) => {
-    setDebts((prev) =>
-      prev.map((d) => (d.id === id ? { ...d, [field]: value } : d))
-    );
-  };
-
-  const handleAddDebt = () => {
-    setDebts((prev) => {
-      const maxId = prev.reduce((max, d) => Math.max(max, d.id), 0);
-      return [
-        ...prev,
-        {
-          id: maxId + 1,
-          name: "",
-          balance: "",
-          apr: "",
-          minPayment: "",
-        },
-      ];
-    });
-  };
-
-  const handleRemoveDebt = (id: number) => {
-    setDebts((prev) => prev.filter((d) => d.id !== id));
-  };
-
-  // ----------------------------------------------------
-  // Render
-  // ----------------------------------------------------
+  const totalDebt = debts.reduce(
+    (sum, d) => sum + parseNumber(d.balance),
+    0
+  );
 
   return (
-    <div className="w-full flex justify-center px-4 py-10 text-slate-100">
-      <div className="w-full max-w-5xl flex flex-col gap-8">
+    <div className="flex w-full justify-center px-4 py-10 text-slate-100">
+      <div className="flex w-full max-w-5xl flex-col gap-8">
         {/* Header */}
-        <header className="flex flex-col gap-3 text-center items-center">
-          <div className="inline-flex items-center gap-2 w-fit rounded-full border border-emerald-500/40 bg-emerald-500/10 px-3 py-1 text-[11px] font-medium text-emerald-200">
-            <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
-            Demo mode · Try DebtBeat without signing in
+        <header className="flex flex-col items-center gap-3 text-center">
+          <div className="inline-flex w-fit items-center gap-2 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-3 py-1 text-[11px] font-medium text-emerald-200">
+            <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-400" />
+            Demo view · Mirroring your Home plan
           </div>
 
           <h1 className="text-3xl font-bold tracking-tight">
-            DebtBeat Payoff Planner
+            DebtBeat Payoff Planner (Demo)
           </h1>
 
           <p className="max-w-2xl text-sm text-slate-300">
-            Enter a few sample cards, choose a strategy, and see a
-            month-by-month breakdown of exactly how much to pay toward each card
-            using your{" "}
+            This demo shows a{" "}
             <span className="font-semibold text-emerald-300">
-              total monthly budget for debt payoff
-            </span>
-            .
+              read-only view
+            </span>{" "}
+            of your DebtBeat plan. All numbers come from the{" "}
+            <span className="font-semibold">Home</span> page.
           </p>
 
           <p className="text-xs text-slate-400">
-            Ready for the full experience?{" "}
+            To change debts, strategy, or budget,{" "}
             <Link
               href="/"
               className="font-semibold text-emerald-300 hover:text-emerald-200"
             >
-              Go back to the main planner
+              go back to the main planner
             </Link>
             .
           </p>
         </header>
 
-        {/* STEP 1: Cards & Budget */}
+        {/* STEP 1: Cards & Budget (read-only) */}
         <section className="space-y-2">
           <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-300">
-            Step 1 · Set up your cards & budget
+            Step 1 · Your cards & budget from Home
           </p>
 
           <div className="grid gap-6 rounded-2xl border border-slate-800 bg-slate-900/80 p-5 shadow-lg md:grid-cols-[2.1fr,1.1fr]">
@@ -473,13 +372,15 @@ export default function DebtPayoffPlannerDemoPage() {
                 <h2 className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-400">
                   Your Debts
                 </h2>
-                <button
-                  type="button"
-                  onClick={handleAddDebt}
-                  className="rounded-md border border-slate-600 px-3 py-1 text-xs font-medium text-slate-100 hover:bg-slate-800"
-                >
-                  + Add Card
-                </button>
+                <span className="text-[11px] text-slate-400">
+                  Edit on{" "}
+                  <Link
+                    href="/"
+                    className="font-semibold text-emerald-300 hover:text-emerald-200"
+                  >
+                    Home
+                  </Link>
+                </span>
               </div>
 
               <table className="min-w-full text-left text-sm">
@@ -489,78 +390,57 @@ export default function DebtPayoffPlannerDemoPage() {
                     <th className="py-2 pr-3">Balance</th>
                     <th className="py-2 pr-3">APR %</th>
                     <th className="py-2 pr-3">Min Payment</th>
-                    <th className="py-2"></th>
                   </tr>
                 </thead>
                 <tbody>
-                  {debts.map((d) => (
-                    <tr key={d.id} className="border-b border-slate-800 last:border-0">
-                      <td className="py-2 pr-3">
-                        <input
-                          className="w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-sm text-slate-100 placeholder-slate-500 focus:border-emerald-400 focus:outline-none"
-                          value={d.name}
-                          placeholder="Card name"
-                          onChange={(e) =>
-                            handleDebtChange(d.id, "name", e.target.value)
-                          }
-                        />
-                      </td>
-                      <td className="py-2 pr-3">
-                        <input
-                          className="w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-sm text-slate-100 placeholder-slate-500 focus:border-emerald-400 focus:outline-none"
-                          value={d.balance}
-                          placeholder="0"
-                          inputMode="decimal"
-                          onChange={(e) =>
-                            handleDebtChange(d.id, "balance", e.target.value)
-                          }
-                        />
-                      </td>
-                      <td className="py-2 pr-3">
-                        <input
-                          className="w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-sm text-slate-100 placeholder-slate-500 focus:border-emerald-400 focus:outline-none"
-                          value={d.apr}
-                          placeholder="0"
-                          inputMode="decimal"
-                          onChange={(e) =>
-                            handleDebtChange(d.id, "apr", e.target.value)
-                          }
-                        />
-                      </td>
-                      <td className="py-2 pr-3">
-                        <input
-                          className="w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-sm text-slate-100 placeholder-slate-500 focus:border-emerald-400 focus:outline-none"
-                          value={d.minPayment}
-                          placeholder="0"
-                          inputMode="decimal"
-                          onChange={(e) =>
-                            handleDebtChange(d.id, "minPayment", e.target.value)
-                          }
-                        />
-                      </td>
-                      <td className="py-2 text-right">
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveDebt(d.id)}
-                          className="text-xs font-medium text-rose-400 hover:text-rose-300"
-                        >
-                          Remove
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                  {debts.length === 0 && (
+                  {debts.length > 0 ? (
+                    debts.map((d) => (
+                      <tr
+                        key={d.id}
+                        className="border-b border-slate-800 last:border-0"
+                      >
+                        <td className="py-2 pr-3 text-slate-100">
+                          {d.name || `Card ${d.id}`}
+                        </td>
+                        <td className="py-2 pr-3 text-slate-100">
+                          ${parseNumber(d.balance).toFixed(2)}
+                        </td>
+                        <td className="py-2 pr-3 text-slate-100">
+                          {parseNumber(d.apr).toFixed(2)}%
+                        </td>
+                        <td className="py-2 pr-3 text-slate-100">
+                          ${parseNumber(d.minPayment).toFixed(2)}
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
                     <tr>
                       <td
-                        colSpan={5}
+                        colSpan={4}
                         className="py-4 text-center text-xs text-slate-500"
                       >
-                        Add at least one card to get started.
+                        No cards yet. Add cards on the{" "}
+                        <Link
+                          href="/"
+                          className="font-semibold text-emerald-300 hover:text-emerald-200"
+                        >
+                          Home
+                        </Link>{" "}
+                        page to see them here.
                       </td>
                     </tr>
                   )}
                 </tbody>
               </table>
+
+              {debts.length > 0 && (
+                <p className="mt-2 text-[11px] text-slate-400">
+                  Total debt:{" "}
+                  <span className="font-semibold text-emerald-300">
+                    ${totalDebt.toFixed(2)}
+                  </span>
+                </p>
+              )}
             </div>
 
             {/* Strategy + budget */}
@@ -570,29 +450,33 @@ export default function DebtPayoffPlannerDemoPage() {
                   Strategy
                 </h2>
 
-                {/* Icon-only selector */}
                 <div className="mt-3 flex items-center justify-center gap-6">
                   {(["warrior", "rebel", "wizard"] as Strategy[]).map((s) => {
                     const selected = strategy === s;
                     return (
-                      <button
+                      <div
                         key={s}
-                        type="button"
-                        onClick={() => setStrategy(s)}
-                        className={`flex h-12 w-12 items-center justify-center rounded-full border text-2xl transition-all ${
+                        className={`flex h-12 w-12 items-center justify-center rounded-full border text-2xl ${
                           selected
-                            ? "border-emerald-400 bg-emerald-500/10 scale-110 shadow-[0_0_0_1px_rgba(16,185,129,0.4)]"
-                            : "border-slate-700 bg-slate-900/80 opacity-60 hover:opacity-90"
+                            ? "border-emerald-400 bg-emerald-500/10 shadow-[0_0_0_1px_rgba(16,185,129,0.4)]"
+                            : "border-slate-700 bg-slate-900/80 opacity-40"
                         }`}
                         aria-label={s}
                       >
                         {STRATEGY_ICONS[s]}
-                      </button>
+                      </div>
                     );
                   })}
                 </div>
-                <p className="mt-2 text-[11px] text-center text-slate-400">
-                  Tap an icon to switch strategies.
+                <p className="mt-2 text-center text-[11px] text-slate-400">
+                  Strategy is set on{" "}
+                  <Link
+                    href="/"
+                    className="font-semibold text-emerald-300 hover:text-emerald-200"
+                  >
+                    Home
+                  </Link>
+                  .
                 </p>
               </div>
 
@@ -600,33 +484,30 @@ export default function DebtPayoffPlannerDemoPage() {
                 <h2 className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-400">
                   Total monthly budget for debt payoff
                 </h2>
-                <div className="mt-3 flex items-center gap-2">
+                <div className="mt-3 flex items-baseline gap-1">
                   <span className="text-sm text-slate-300">$</span>
-                  <input
-                    className="w-28 rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-sm text-slate-100 placeholder-slate-500 focus:border-emerald-400 focus:outline-none"
-                    value={extraPerMonth}
-                    inputMode="decimal"
-                    onChange={(e) => setExtraPerMonth(e.target.value)}
-                  />
+                  <span className="text-lg font-semibold text-emerald-300">
+                    {state.extraBudget.toFixed(2)}
+                  </span>
                 </div>
                 <p className="mt-2 text-xs text-slate-400">
-                  This is the total amount you can put toward your credit cards
-                  each month, including minimum payments and anything extra.
+                  This is the same total monthly budget you entered on the{" "}
+                  <span className="font-semibold">Home</span> page, including
+                  minimums and any extra you can put toward debt.
                 </p>
               </div>
 
               <div className="mt-1 rounded-lg border border-dashed border-slate-700 bg-slate-900/80 p-3 text-xs text-slate-300">
                 <p className="mb-1 font-semibold text-slate-100">
-                  What this planner is telling you:
+                  What this demo is showing:
                 </p>
                 <p>
-                  Each month, you commit to one{" "}
+                  We take your{" "}
                   <span className="font-semibold text-emerald-300">
-                    total budget
+                    real plan from Home
                   </span>{" "}
-                  for all your cards. DebtBeat uses that budget to cover your
-                  minimums first, then automatically pours every freed-up dollar
-                  into extra payments on the highest-priority card.
+                  and render it here with charts and tables so you can see how
+                  DebtBeat guides your payoff journey month by month.
                 </p>
               </div>
             </div>
@@ -706,7 +587,14 @@ export default function DebtPayoffPlannerDemoPage() {
                   </ResponsiveContainer>
                 ) : (
                   <div className="flex h-full items-center justify-center text-xs text-slate-500">
-                    Add debts and a monthly budget to see your payoff projection.
+                    Add debts and a monthly budget on the{" "}
+                    <Link
+                      href="/"
+                      className="font-semibold text-emerald-300 hover:text-emerald-200"
+                    >
+                      Home
+                    </Link>{" "}
+                    page to see your payoff projection here.
                   </div>
                 )}
               </div>
@@ -752,8 +640,14 @@ export default function DebtPayoffPlannerDemoPage() {
                   </>
                 ) : (
                   <p className="text-xs text-slate-500">
-                    Once you add at least one card and a positive budget,
-                    we&apos;ll show a detailed breakdown of your next payment
+                    Once you add at least one card and a positive budget on{" "}
+                    <Link
+                      href="/"
+                      className="font-semibold text-emerald-300 hover:text-emerald-200"
+                    >
+                      Home
+                    </Link>
+                    , we&apos;ll show a detailed breakdown of your next payment
                     here.
                   </p>
                 )}
@@ -783,7 +677,7 @@ export default function DebtPayoffPlannerDemoPage() {
         {/* STEP 3: Month-by-month table */}
         <section className="space-y-2">
           <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-300">
-            Step 3 · Follow the month-by-month plan
+            Step 3 · Month-by-month payoff instructions
           </p>
 
           <div className="rounded-2xl border border-slate-800 bg-slate-900/80 p-5 shadow-lg">
@@ -801,22 +695,28 @@ export default function DebtPayoffPlannerDemoPage() {
                 <div className="text-xs text-slate-300">
                   Starting total balance:{" "}
                     <span className="font-semibold text-emerald-300">
-                    ${totalBalanceStart.toFixed(2)}
-                  </span>
+                      ${totalBalanceStart.toFixed(2)}
+                    </span>
                   <br />
                   Months to payoff:{" "}
-                  <span className="font-semibold text-emerald-300">
-                    {payoffMonths} month
-                    {payoffMonths === 1 ? "" : "s"}
-                  </span>
+                    <span className="font-semibold text-emerald-300">
+                      {payoffMonths} month
+                      {payoffMonths === 1 ? "" : "s"}
+                    </span>
                 </div>
               )}
             </div>
 
             {schedule.length === 0 ? (
               <p className="text-xs text-slate-500">
-                Once you have at least one valid debt and a payment plan, your
-                month-by-month instructions will show up here.
+                Once you have at least one valid debt and a payment plan on{" "}
+                <Link
+                  href="/"
+                  className="font-semibold text-emerald-300 hover:text-emerald-200"
+                >
+                  Home
+                </Link>
+                , your month-by-month instructions will show up here.
               </p>
             ) : (
               <div className="max-h-[480px] overflow-auto rounded-xl border border-slate-800 bg-slate-950/50">
@@ -825,7 +725,9 @@ export default function DebtPayoffPlannerDemoPage() {
                     <tr>
                       <th className="py-2 px-3">Month</th>
                       <th className="py-2 px-3">Card</th>
-                      <th className="py-2 px-3 text-right">Start Balance</th>
+                      <th className="py-2 px-3 text-right">
+                        Start Balance
+                      </th>
                       <th className="py-2 px-3 text-right">Min Payment</th>
                       <th className="py-2 px-3 text-right">Extra Payment</th>
                       <th className="py-2 px-3 text-right">Total Payment</th>

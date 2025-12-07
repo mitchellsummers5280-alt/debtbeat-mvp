@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
+import Image from "next/image";
 import {
   LineChart,
   Line,
@@ -11,13 +12,8 @@ import {
   ResponsiveContainer,
 } from "recharts";
 
-import Link from "next/link";
-
 import AIRecommendationCard from "../src/components/AIRecommendationCard";
-import {
-  generateAiRecommendation,
-  type AiRecommendation,
-} from "../aiRecommendations";
+import { type AiRecommendation } from "../aiRecommendations";
 
 import {
   Strategy,
@@ -30,6 +26,8 @@ import {
   formatCurrency,
   getStrategyLabel,
 } from "@/lib/debtPlan";
+
+import { useDebtStore } from "@/lib/debtStore";
 
 // ----------------------------------------------------
 // Types
@@ -81,32 +79,6 @@ function getAltStrategy(strategy: Strategy): Strategy {
   if (strategy === "warrior") return "rebel";
   if (strategy === "rebel") return "warrior";
   return "rebel";
-}
-
-// (currently not used, but kept for future logic if needed)
-function pickNextDebtIndex(
-  debts: { balance: number; apr: number }[],
-  strategy: Strategy
-): number | null {
-  const alive = debts
-    .map((d, i) => ({ ...d, i }))
-    .filter((d) => d.balance > 0);
-
-  if (!alive.length) return null;
-
-  if (strategy === "warrior") {
-    return alive.sort((a, b) => a.balance - b.balance)[0].i;
-  }
-  if (strategy === "rebel") {
-    return alive.sort((a, b) => b.apr - a.apr)[0].i;
-  }
-
-  return alive
-    .map((d) => ({
-      ...d,
-      score: d.apr * 2 + d.balance / 1000,
-    }))
-    .sort((a, b) => b.score - a.score)[0].i;
 }
 
 // ----------------------------------------------------
@@ -245,20 +217,29 @@ const StrategyButton: React.FC<StrategyButtonProps> = ({
 // ----------------------------------------------------
 
 export default function Home() {
+  const {
+    state,
+    setDebts: setGlobalDebts,
+    setStrategy: setGlobalStrategy,
+    setExtraBudget,
+    setDashboardSummary,
+  } = useDebtStore();
+
   // debts start with empty numeric fields so no leading 0s
   const [debts, setDebts] = useState<Debt[]>([
     { id: 1, name: "Card 1", balance: "", apr: "", minPayment: "" },
   ]);
 
   const [strategy, setStrategy] = useState<Strategy>("warrior");
-  const [monthlyBudget, setMonthlyBudget] = useState<string>("500");
+  const [monthlyBudget, setMonthlyBudget] = useState<string>("");
   const [result, setResult] = useState<PlanResult | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [showSchedule, setShowSchedule] = useState(false);
   const [recommendationNote, setRecommendationNote] = useState<string | null>(
     null
   );
-  const [aiRec, setAiRec] = useState<AiRecommendation | null>(null);
+  const [aiRec] = useState<AiRecommendation | null>(null);
+  const [planError, setPlanError] = useState<string | null>(null);
+  const [minPayWarning, setMinPayWarning] = useState<string | null>(null);
 
   // saved snapshot for comparisons (debts + budget used)
   const [savedDebts, setSavedDebts] = useState<Debt[] | null>(null);
@@ -267,6 +248,25 @@ export default function Home() {
   // what-if slider
   const [extraPerMonth, setExtraPerMonth] = useState<number>(0);
   const [whatIfPlan, setWhatIfPlan] = useState<PlanResult | null>(null);
+
+  // --------------------------------------------------
+  // Sync FROM global store into Home when it’s already populated
+  // --------------------------------------------------
+  useEffect(() => {
+    if (state.debts && state.debts.length) {
+      setDebts(state.debts as Debt[]);
+    }
+
+    if (state.strategy) {
+      setStrategy(state.strategy);
+    }
+
+    if (state.extraBudget && state.extraBudget > 0) {
+      setMonthlyBudget(state.extraBudget.toString());
+    }
+    // intentionally only on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const totalRemaining = useMemo(
     () =>
@@ -297,8 +297,8 @@ export default function Home() {
 
     return {
       altStrategy: alt,
-      interestDiff, // positive means chosen saves interest
-      monthsDiff, // positive means chosen is faster
+      interestDiff,
+      monthsDiff,
     };
   }, [result, savedDebts, lastBudgetUsed]);
 
@@ -345,9 +345,9 @@ export default function Home() {
       prev.map((d) =>
         d.id === id
           ? {
-              ...d,
-              [field]: value, // keep as raw string, no auto "0"
-            }
+            ...d,
+            [field]: value,
+          }
           : d
       )
     );
@@ -370,74 +370,131 @@ export default function Home() {
     setDebts((prev) => prev.filter((d) => d.id !== id));
   };
 
-  const handleGeneratePlan = () => {
-    setError(null);
-    setResult(null);
-    setShowSchedule(false);
-    setRecommendationNote(null);
-    setAiRec(null);
-    setWhatIfPlan(null);
-    setExtraPerMonth(0);
+  const handleBudgetChange = (value: string) => {
+    setMonthlyBudget(value);
+    const numeric = parseFloat(value || "0") || 0;
+    setExtraBudget(numeric); // sync to global store
+  };
 
+  const handleStrategyChange = (newStrategy: Strategy) => {
+    setStrategy(newStrategy);
+    setGlobalStrategy(newStrategy); // sync to global store
+  };
+
+  const handleGeneratePlan = () => {
+    // 1) Filter out empty debts
     const nonEmpty = debts.filter(
       (d) =>
         parseFloat(d.balance || "0") > 0 &&
-        !isNaN(parseFloat(d.balance || "0"))
+        parseFloat(d.minPayment || "0") > 0
     );
 
-    if (nonEmpty.length === 0) {
-      setError("Please enter at least one card with a positive balance.");
+    // Push cleaned debts into global store so Demo/Dashboard can see them
+    setGlobalDebts(nonEmpty as any);
+
+    if (!nonEmpty.length) {
+      setPlanError("Add at least one card with a balance and minimum payment.");
+      setResult(null);
+      setSavedDebts([]);
+      setLastBudgetUsed(null);
+      setWhatIfPlan(null);
       return;
     }
 
-    const planOrError = calculatePlan(nonEmpty, monthlyBudget, strategy);
-    if ("error" in planOrError) {
-      setError(planOrError.error);
+    // 2) Parse budget
+    const budgetNumber = parseFloat(monthlyBudget || "0");
+
+    if (!Number.isFinite(budgetNumber) || budgetNumber <= 0) {
+      setPlanError("Please enter a positive monthly budget.");
+      setResult(null);
+      setSavedDebts([]);
+      setLastBudgetUsed(null);
+      setWhatIfPlan(null);
       return;
     }
 
-    const plan = planOrError;
+    setPlanError(null);
 
-    setResult(plan);
-    setSavedDebts(nonEmpty);
-    const budgetNumber = parseFloat(monthlyBudget || "0") || 0;
-    setLastBudgetUsed(budgetNumber);
-
-    // build AI recommendation for this result
-    const rec = generateAiRecommendation(
-      strategy,
-      nonEmpty.length,
-      plan.months,
-      plan.totalInterest
-    );
-    setAiRec(rec);
-
-    // ----- Build and save dashboard summary -----
-    const totalDebt = nonEmpty.reduce(
-      (sum, d) => sum + (parseFloat(d.balance || "0") || 0),
-      0
-    );
-
+    // 3) Compute min-payment budget and starting monthly interest
     const minBudget = nonEmpty.reduce(
       (sum, d) => sum + (parseFloat(d.minPayment || "0") || 0),
       0
     );
 
-    let interestSaved = 0;
-    if (minBudget > 0 && budgetNumber >= minBudget) {
-      const minPlanOrError = calculatePlan(
-        nonEmpty,
-        minBudget.toString(),
-        strategy
+    const startingMonthlyInterest = nonEmpty.reduce((sum, d) => {
+      const bal = parseFloat(d.balance || "0") || 0;
+      const apr = parseFloat(d.apr || "0") || 0;
+      const monthlyRate = apr / 100 / 12;
+      return sum + bal * monthlyRate;
+    }, 0);
+
+    const negativeAmort =
+      startingMonthlyInterest > 0 &&
+      minBudget < startingMonthlyInterest - 0.01;
+
+    if (negativeAmort) {
+      setMinPayWarning(
+        "Heads up: your combined minimum payments are lower than the monthly interest. At this rate your balances would grow instead of shrinking. “Interest saved” is capped to keep estimates realistic."
       );
-      if (!("error" in minPlanOrError)) {
-        interestSaved = Math.max(
-          0,
-          minPlanOrError.totalInterest - plan.totalInterest
-        );
-      }
+    } else {
+      setMinPayWarning(null);
     }
 
+    // 4) Run main plan
+    const planOrError = calculatePlan(nonEmpty, monthlyBudget, strategy);
+
+    if ("error" in planOrError) {
+      setPlanError(planOrError.error);
+      setResult(null);
+      setSavedDebts([]);
+      setLastBudgetUsed(null);
+      setWhatIfPlan(null);
+      return;
+    }
+
+    const plan = planOrError;
+
+    // Save core plan state
+    setResult(plan);
+    setSavedDebts(nonEmpty);
+    setLastBudgetUsed(budgetNumber);
+    setWhatIfPlan(null);
+
+    // 5) Total starting debt
+    const totalDebt = nonEmpty.reduce(
+      (sum, d) => sum + (parseFloat(d.balance || "0") || 0),
+      0
+    );
+
+    // 6) Build baseline “min payments only” plan
+    const baselinePlan = runPlanSafe(nonEmpty, minBudget, plan.strategyUsed);
+
+    let interestSaved = 0;
+
+    if (baselinePlan) {
+      const baselineInterest = Number.isFinite(baselinePlan.totalInterest)
+        ? baselinePlan.totalInterest
+        : baselinePlan.schedule.reduce(
+          (sum, row) => sum + (row.interestPaid || 0),
+          0
+        );
+
+      const planInterest = Number.isFinite(plan.totalInterest)
+        ? plan.totalInterest
+        : plan.schedule.reduce(
+          (sum, row) => sum + (row.interestPaid || 0),
+          0
+        );
+
+      const rawSaved = Math.max(0, baselineInterest - planInterest);
+
+      // Cap interestSaved to avoid absurd values when min-pay plan
+      // negatively amortizes forever. Here we cap at 3× total starting debt.
+      const cap = totalDebt * 3;
+      interestSaved = Math.min(rawSaved, cap);
+    }
+
+    // 7) Build dashboard summary
     const summary: DashboardSummary = {
       totalDebt,
       projectedMonths: plan.months,
@@ -449,6 +506,8 @@ export default function Home() {
       })),
     };
 
+    // 8) Push into global store + localStorage
+    setDashboardSummary(summary);
     saveDashboardSummary(summary);
   };
 
@@ -481,7 +540,7 @@ export default function Home() {
         "Your debts are fairly balanced. The Wizard’s blended approach is a solid middle ground between motivation and interest savings.";
     }
 
-    setStrategy(chosen);
+    handleStrategyChange(chosen);
     setRecommendationNote(note);
   };
 
@@ -534,7 +593,9 @@ export default function Home() {
     // CASE 3: Less than 1 lifetime → months + years
     return `🔥 With ${label} strategy, you could be debt free in ${result.months.toFixed(
       0
-    )} months (~${years.toFixed(1)} years). Estimated total interest paid: ${formatCurrency(
+    )} months (~${years.toFixed(
+      1
+    )} years). Estimated total interest paid: ${formatCurrency(
       result.totalInterest
     )}.`;
   };
@@ -556,30 +617,6 @@ export default function Home() {
           "-apple-system, system-ui, BlinkMacSystemFont, 'SF Pro Text', sans-serif",
       }}
     >
-      <nav style={{ padding: "16px 0", display: "flex", gap: "16px" }}>
-        <Link
-          href="/"
-          style={{
-            color: "#9ca3af",
-            textDecoration: "none",
-            fontSize: "14px",
-          }}
-        >
-          Home
-        </Link>
-
-        <Link
-          href="/demo"
-          style={{
-            color: "#9ca3af",
-            textDecoration: "none",
-            fontSize: "14px",
-          }}
-        >
-          Demo Page
-        </Link>
-      </nav>
-
       <div
         style={{
           maxWidth: "960px",
@@ -587,23 +624,43 @@ export default function Home() {
           padding: "24px 16px 48px",
         }}
       >
+        {/* HERO: logo-only with tagline */}
         <header style={{ textAlign: "center", marginBottom: "32px" }}>
-          <h1
+          <div
             style={{
-              fontSize: "36px",
-              fontWeight: 800,
-              marginBottom: "8px",
+              display: "flex",
+              justifyContent: "center",
+              marginBottom: "16px",
             }}
           >
-            DebtBeat
-          </h1>
+            <div
+              style={{
+                background: "#020617",
+                borderRadius: "32px",
+                padding: "18px",
+                border: "1px solid #1f2937",
+                boxShadow: "0 0 32px rgba(15,23,42,0.9)",
+              }}
+            >
+              <Image
+                src="/debtbeat-logo.png"
+                alt="DebtBeat logo"
+                width={112}
+                height={112}
+                style={{
+                  display: "block",
+                  filter: "invert(1)",
+                }}
+              />
+            </div>
+          </div>
 
           <p
             style={{
               color: "#9ca3af",
-              maxWidth: "520px",
+              maxWidth: "640px",
               margin: "0 auto",
-              fontSize: "14px",
+              fontSize: "16px",
             }}
           >
             Add your credit cards, choose a strategy, and estimate your path to
@@ -727,7 +784,7 @@ export default function Home() {
                 type="number"
                 inputMode="decimal"
                 placeholder="e.g. 5000"
-                min={0} // non-negative; no upper limit
+                min={0}
                 value={d.balance}
                 onChange={(e) =>
                   handleDebtChange(d.id, "balance", e.target.value)
@@ -748,11 +805,9 @@ export default function Home() {
                 inputMode="decimal"
                 step="0.01"
                 placeholder="e.g. 24.99"
-                min={0} // any APR, no cap
+                min={0}
                 value={d.apr}
-                onChange={(e) =>
-                  handleDebtChange(d.id, "apr", e.target.value)
-                }
+                onChange={(e) => handleDebtChange(d.id, "apr", e.target.value)}
                 style={{
                   borderRadius: "8px",
                   border: "1px solid #374151",
@@ -767,19 +822,17 @@ export default function Home() {
               <input
                 type="number"
                 inputMode="decimal"
-                placeholder="e.g. 75"
                 step="0.01"
-                min={0} // no cap on min payment
+                placeholder="e.g. 75"
+                min={0}
                 value={d.minPayment}
-                onChange={(e) =>
-                  handleDebtChange(d.id, "minPayment", e.target.value)
-                }
+                onChange={(e) => handleDebtChange(d.id, "minPayment", e.target.value)}
                 style={{
                   borderRadius: "8px",
                   border: "1px solid #374151",
                   background: "#020617",
                   padding: "8px 10px",
-                  color: "#f9fafb",
+                  color: "#f9fabfb",
                   fontSize: "13px",
                   minWidth: 0,
                 }}
@@ -852,19 +905,21 @@ export default function Home() {
               label="The Warrior"
               icon="⚔️"
               active={strategy === "warrior"}
-              onClick={() => setStrategy("warrior")}
+              onClick={() => handleStrategyChange("warrior")}
             />
+
             <StrategyButton
               label="The Rebel"
               icon="🧨"
               active={strategy === "rebel"}
-              onClick={() => setStrategy("rebel")}
+              onClick={() => handleStrategyChange("rebel")}
             />
+
             <StrategyButton
               label="The Wizard"
               icon="🧙‍♂️"
               active={strategy === "wizard"}
-              onClick={() => setStrategy("wizard")}
+              onClick={() => handleStrategyChange("wizard")}
             />
           </div>
 
@@ -929,7 +984,7 @@ export default function Home() {
             type="number"
             inputMode="decimal"
             value={monthlyBudget}
-            onChange={(e) => setMonthlyBudget(e.target.value)}
+            onChange={(e) => handleBudgetChange(e.target.value)}
             style={{
               borderRadius: "8px",
               border: "1px solid #374151",
@@ -939,9 +994,26 @@ export default function Home() {
               fontSize: "14px",
               width: "100%",
               maxWidth: "260px",
-              marginBottom: "16px",
+              marginBottom: "8px",
             }}
           />
+
+          {minPayWarning && (
+            <div
+              style={{
+                marginTop: "4px",
+                marginBottom: "12px",
+                padding: "8px 10px",
+                borderRadius: "12px",
+                background: "#3b0764",
+                border: "1px solid #a855f7",
+                fontSize: "12px",
+                color: "#f5f3ff",
+              }}
+            >
+              {minPayWarning}
+            </div>
+          )}
 
           {/* What-if slider */}
           <div
@@ -1005,7 +1077,7 @@ export default function Home() {
         </section>
 
         {/* ERROR */}
-        {error && (
+        {planError && (
           <div
             style={{
               background: "#7f1d1d",
@@ -1016,7 +1088,7 @@ export default function Home() {
               fontSize: "13px",
             }}
           >
-            {error}
+            {planError}
           </div>
         )}
 
@@ -1128,9 +1200,7 @@ export default function Home() {
               >
                 <p>
                   If you add{" "}
-                  <strong>
-                    {formatCurrency(whatIfSummary.extraAmount)}
-                  </strong>{" "}
+                  <strong>{formatCurrency(whatIfSummary.extraAmount)}</strong>{" "}
                   each month, you could be debt free in{" "}
                   <strong>{whatIfSummary.newMonths.toFixed(0)} months</strong>{" "}
                   instead of{" "}

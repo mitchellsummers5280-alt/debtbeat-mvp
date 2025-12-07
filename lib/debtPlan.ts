@@ -108,7 +108,9 @@ export function calculatePlan(
 
   const debts = cloneNumericDebts(debtsInput);
   if (debts.length === 0) {
-    return { error: "Add at least one card with a balance and minimum payment." };
+    return {
+      error: "Add at least one card with a balance and minimum payment.",
+    };
   }
 
   const totalMin = debts.reduce((sum, d) => sum + d.minPayment, 0);
@@ -133,7 +135,9 @@ export function calculatePlan(
 
     const interestByIndex: number[] = new Array(workingDebts.length).fill(0);
     const minDueByIndex: number[] = new Array(workingDebts.length).fill(0);
-    const totalPaymentByIndex: number[] = new Array(workingDebts.length).fill(0);
+    const totalPaymentByIndex: number[] = new Array(workingDebts.length).fill(
+      0
+    );
     const extraByIndex: number[] = new Array(workingDebts.length).fill(0);
 
     let sumMinDue = 0;
@@ -170,7 +174,12 @@ export function calculatePlan(
     });
 
     // 3) Allocate leftover based on strategy priority
-    type PriorityItem = { i: number; balance: number; apr: number; interest: number };
+    type PriorityItem = {
+      i: number;
+      balance: number;
+      apr: number;
+      interest: number;
+    };
 
     const priorityList: PriorityItem[] = workingDebts
       .map((d, i) => ({
@@ -262,10 +271,10 @@ export function calculatePlan(
   }
 
   if (months >= maxMonths) {
-  return {
-    error: `At this payment level it would take more than ${MAX_LIFETIMES.toLocaleString()} lifetimes to become debt free. Increase your budget.`,
-  };
-}
+    return {
+      error: `At this payment level it would take more than ${MAX_LIFETIMES.toLocaleString()} lifetimes to become debt free. Increase your budget.`,
+    };
+  }
 
   return {
     months,
