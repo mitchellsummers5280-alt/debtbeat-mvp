@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   LineChart,
   Line,
@@ -91,15 +91,15 @@ const DashboardPage: React.FC = () => {
   }, []);
 
   return (
-    <div className="flex w-full justify-center px-4 py-10">
-      <div className="flex w-full justify-center">
-        <div className="flex w-full max-w-3xl flex-col gap-8">
+    <div className="w-full flex justify-center px-4 py-10">
+      <div className="w-full flex justify-center">
+        <div className="w-full max-w-3xl flex flex-col gap-8">
           {/* HEADER */}
-          <header className="flex flex-col gap-2 text-center">
+          <header className="text-center flex flex-col gap-2">
             <h1 className="text-3xl font-bold tracking-tight text-slate-100">
               Your Dashboard
             </h1>
-            <p className="text-sm text-slate-300">
+            <p className="text-slate-300 text-sm">
               Track your payoff progress and stay motivated.
             </p>
             <p className="text-xs text-slate-500">
@@ -108,9 +108,9 @@ const DashboardPage: React.FC = () => {
           </header>
 
           {/* SUMMARY CARDS */}
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
-            <div className="rounded-xl bg-slate-800 p-4 text-center shadow">
-              <p className="text-xs uppercase tracking-wide text-slate-400">
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+            <div className="bg-slate-800 rounded-xl p-4 text-center shadow">
+              <p className="text-slate-400 text-xs uppercase tracking-wide">
                 Total Debt
               </p>
               <p className="text-lg font-semibold text-slate-100">
@@ -118,8 +118,8 @@ const DashboardPage: React.FC = () => {
               </p>
             </div>
 
-            <div className="rounded-xl bg-slate-800 p-4 text-center shadow">
-              <p className="text-xs uppercase tracking-wide text-slate-400">
+            <div className="bg-slate-800 rounded-xl p-4 text-center shadow">
+              <p className="text-slate-400 text-xs uppercase tracking-wide">
                 Interest Saved
               </p>
               <p className="text-lg font-semibold text-emerald-400">
@@ -127,8 +127,8 @@ const DashboardPage: React.FC = () => {
               </p>
             </div>
 
-            <div className="rounded-xl bg-slate-800 p-4 text-center shadow">
-              <p className="text-xs uppercase tracking-wide text-slate-400">
+            <div className="bg-slate-800 rounded-xl p-4 text-center shadow">
+              <p className="text-slate-400 text-xs uppercase tracking-wide">
                 Months Left
               </p>
               <p className="text-lg font-semibold text-slate-100">
@@ -138,25 +138,25 @@ const DashboardPage: React.FC = () => {
           </div>
 
           {/* LINE CHART */}
-          <div className="rounded-xl bg-slate-800 p-4 shadow">
-            <h2 className="mb-2 text-center text-lg font-semibold text-slate-100">
+          <div className="bg-slate-800 p-4 rounded-xl shadow">
+            <h2 className="text-lg font-semibold text-slate-100 mb-2 text-center">
               Remaining Balance Over Time
             </h2>
-            <p className="mb-4 text-center text-xs text-slate-400">
+            <p className="text-xs text-slate-400 mb-4 text-center">
               Projected remaining balance each month if you stick with your
               current plan.
             </p>
 
-            <div className="h-64 w-full">
+            <div className="w-full h-64">
               <ResponsiveContainer>
                 <LineChart data={chartData}>
-                  <CartesianGrid stroke="#334155" strokeDasharray="3 3" />
+                  <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
                   <XAxis dataKey="month" stroke="#94a3b8" />
                   <YAxis stroke="#94a3b8" />
                   <Tooltip
                     contentStyle={{ background: "#0f172a", border: "none" }}
                     labelStyle={{ color: "#e2e8f0" }}
-                    formatter={(value: number | string) =>
+                    formatter={(value: any) =>
                       currencyFormatter.format(Number(value))
                     }
                   />

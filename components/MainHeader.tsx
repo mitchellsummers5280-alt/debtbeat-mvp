@@ -16,10 +16,11 @@ export function MainHeader() {
 
   return (
     <header className="border-b border-slate-800 bg-black/95">
-      <div className="mx-auto flex w-full max-w-6xl flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="mx-auto flex w-full max-w-6xl items-center justify-between px-4 py-3">
         {/* Left: Logo + Wordmark */}
         <Link href="/" className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-700 bg-slate-950">
+          {/* DB Icon */}
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-950 border border-slate-700">
             <Image
               src="/debtbeat-logo.png"
               alt="DebtBeat logo"
@@ -31,9 +32,10 @@ export function MainHeader() {
             />
           </div>
 
-          {/* Hide the text on the tiniest screens so it never collides */}
-          <span className="hidden text-lg font-semibold tracking-tight xs:inline">
-            Debt<span className="text-emerald-400">Beat</span>
+          {/* Wordmark */}
+          <span className="text-xl font-semibold tracking-tight">
+            <span className="text-white">Debt</span>
+            <span className="text-emerald-400">Beat</span>
           </span>
         </Link>
 
@@ -49,13 +51,14 @@ export function MainHeader() {
               <Link
                 key={item.href}
                 href={item.href}
-                className={`transition-colors ${
-                  isActive
-                    ? "text-emerald-400"
-                    : "text-slate-300 hover:text-emerald-300"
+                className={`relative transition hover:text-emerald-400 ${
+                  isActive ? "text-emerald-400" : ""
                 }`}
               >
                 {item.label}
+                {isActive && (
+                  <span className="absolute inset-x-0 -bottom-1 h-px bg-emerald-400" />
+                )}
               </Link>
             );
           })}
