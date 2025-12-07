@@ -16,10 +16,10 @@ export function MainHeader() {
 
   return (
     <header className="border-b border-slate-800 bg-black/95">
-      <div className="relative flex w-full items-center px-4 py-3">
+      <div className="mx-auto flex w-full max-w-6xl flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
         {/* Left: Logo + Wordmark */}
         <Link href="/" className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-950 border border-slate-700">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-700 bg-slate-950">
             <Image
               src="/debtbeat-logo.png"
               alt="DebtBeat logo"
@@ -31,13 +31,14 @@ export function MainHeader() {
             />
           </div>
 
-          <span className="text-lg font-semibold tracking-tight">
+          {/* Hide the text on the tiniest screens so it never collides */}
+          <span className="hidden text-lg font-semibold tracking-tight xs:inline">
             Debt<span className="text-emerald-400">Beat</span>
           </span>
         </Link>
 
-        {/* Center Navigation */}
-        <nav className="absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 gap-6 text-xs sm:text-sm font-medium">
+        {/* Nav: wraps on small screens instead of overlapping */}
+        <nav className="flex flex-wrap gap-4 text-xs font-medium text-slate-300 sm:text-sm">
           {navItems.map((item) => {
             const isActive =
               item.href === "/"
