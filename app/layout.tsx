@@ -1,25 +1,11 @@
 // app/layout.tsx
-import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
-
-import AuthProvider from "./AuthProvider";
-import { DebtProvider } from "@/lib/debtStore";
+import type { Metadata } from "next";
 import { MainHeader } from "@/components/MainHeader";
-
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
 
 export const metadata: Metadata = {
   title: "DebtBeat",
-  description: "A debt payoff planner that helps you become debt-free.",
+  description: "DebtBeat – gamified credit card payoff planner",
 };
 
 export default function RootLayout({
@@ -28,15 +14,12 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
+    <html lang="en" className="bg-slate-950">
       <body className="min-h-screen bg-slate-950 text-slate-100 antialiased">
-
-        <AuthProvider>
-          <DebtProvider>
-            <MainHeader />
-            <main className="min-h-screen">{children}</main>
-          </DebtProvider>
-        </AuthProvider>
+        <div className="flex min-h-screen flex-col">
+          <MainHeader />
+          <main className="flex-1">{children}</main>
+        </div>
       </body>
     </html>
   );
